@@ -38,4 +38,7 @@ def test_build_report_json_summary_defaults():
         "failures": 0,
         "avg_overlap": 0,
         "high_risk_percent": 0,
+        "avg_numfound_delta": 0,
+        "avg_sort_instability_ratio": 0,
+        "queries_with_facet_changes_percent": 0,
     }

@@ -84,3 +84,24 @@ golden_queries:
     assert result["pass"] is False
     assert result["golden"]["failed"] is True
 
+
+def test_gate_golden_empty_expected_is_skipped(tmp_path: Path):
+    golden_path = tmp_path / "golden.jsonl"
+    golden_path.write_text(
+        '{"name":"skip","params":{"q":"a"},"expected_ids":[]}\n',
+        encoding="utf-8",
+    )
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """
+version: 1
+golden_queries:
+  enabled: true
+  file: "golden.jsonl"
+""",
+        encoding="utf-8",
+    )
+    policy = load_gate_policy(policy_path)
+    result = evaluate_gate(compare_data=_compare_payload(), policy_data=policy, policy_dir=tmp_path)
+    assert result["pass"] is True
+    assert result["golden"]["results"][0]["status"] == "SKIP"

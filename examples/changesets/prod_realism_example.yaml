@@ -56,6 +56,15 @@ queries:
       - type: "drop_param"
         name: "token"
 
+replay:
+  capture:
+    facets:
+      enabled: true
+      fields: ["category"]
+      limit: 20
+    track_numfound: true
+    track_sort: true
+
 changes:
   - op: "schema.field.update"
     field: "title"
@@ -77,4 +86,3 @@ evaluation:
     structured: true
     max_queries: 5
     max_docs_per_query: 2
-

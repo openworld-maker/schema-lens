@@ -1,0 +1,2 @@
+"""Golden query/document helpers."""
+

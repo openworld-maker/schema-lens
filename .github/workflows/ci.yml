@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -20,3 +21,63 @@ jobs:
         run: ruff check .
       - name: Unit tests
         run: pytest -q -m "not integration"
+
+  relevance-summary:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Start SolrCloud
+        run: make dev-up
+      - name: Wait for Solr and setup baseline
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://localhost:8983/solr/admin/info/system?wt=json" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          make demo-setup
+      - name: Run schema-lens scenario
+        run: |
+          schema-lens run examples/changesets/prod_realism_example.yaml --out out/ci
+      - name: Gate
+        run: |
+          schema-lens gate --compare out/ci/compare.json --policy examples/policy/gate_default.yaml || test $? -eq 2
+      - name: Build CI summary
+        run: |
+          schema-lens ci summarize --compare out/ci/compare.json --policy examples/policy/gate_default.yaml --out out/ci/summary.md
+          cat out/ci/summary.md
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-lens-ci-artifacts
+          path: out/ci
+          if-no-files-found: warn
+      - name: Post PR comment
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.existsSync('out/ci/summary.md')
+              ? fs.readFileSync('out/ci/summary.md', 'utf8')
+              : 'Schema-Lens summary missing.';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
+      - name: Teardown SolrCloud
+        if: always()
+        run: make dev-down

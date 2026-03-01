@@ -14,6 +14,7 @@ import typer
 from schema_lens.changesets.apply_queryparams import merge_queryparams
 from schema_lens.changesets.parser import parse_changeset
 from schema_lens.changesets.validator import validate_changeset
+from schema_lens.ci.summarize import build_ci_summary_markdown
 from schema_lens.compare.diff import compare_replay
 from schema_lens.compare.explain_fetcher import fetch_explains
 from schema_lens.compare.gate import evaluate_gate, load_gate_policy
@@ -21,6 +22,9 @@ from schema_lens.config import RunManifest
 from schema_lens.data.docs_loader import load_docs
 from schema_lens.data.solr_sampler import sample_docs_from_solr
 from schema_lens.errors import StageError
+from schema_lens.golden.discover import discover_golden_queries
+from schema_lens.golden.model import GoldenQuery
+from schema_lens.golden.store import append_golden
 from schema_lens.http.client import SolrHttpClient
 from schema_lens.logging import configure_logging
 from schema_lens.queries.loader import load_queries
@@ -32,10 +36,12 @@ from schema_lens.report.html_report import render_html_report
 from schema_lens.report.json_report import build_report_json
 from schema_lens.schema.preflight import run_preflight
 from schema_lens.shadow.manager import cleanup_shadow, create_shadow
+from schema_lens.snapshot.snapshotter import capture_snapshot, load_snapshot
 from schema_lens.solr.admin_api import system_info
 from schema_lens.solr.collections_api import cluster_status
 from schema_lens.solr.schema_api import get_schema
 from schema_lens.solr.update_api import post_docs
+from schema_lens.util.git import current_git_commit_short
 from schema_lens.util.io import ensure_dir, read_json, write_json, write_jsonl, write_text
 from schema_lens.util.time import utc_now_iso
 
@@ -43,9 +49,13 @@ app = typer.Typer(help="Schema Lens: Solr schema evolution impact simulator")
 shadow_app = typer.Typer(help="Shadow collection operations")
 queries_app = typer.Typer(help="Query source operations")
 docs_app = typer.Typer(help="Document source operations")
+golden_app = typer.Typer(help="Golden query operations")
+ci_app = typer.Typer(help="CI summary operations")
 app.add_typer(shadow_app, name="shadow")
 app.add_typer(queries_app, name="queries")
 app.add_typer(docs_app, name="docs")
+app.add_typer(golden_app, name="golden")
+app.add_typer(ci_app, name="ci")
 
 
 def _hash_obj(data: Any) -> str:
@@ -150,6 +160,33 @@ def inspect(
     payload = _inspect_collection(solr_url, collection, verbose=verbose)
     write_json(out, payload)
     typer.echo(str(out))
+
+
+@app.command()
+def snapshot(
+    solr_url: str = typer.Option(..., "--solr-url"),
+    collection: str = typer.Option(..., "--collection"),
+    out: Path = typer.Option(..., "--out"),
+    request_defaults: Path | None = typer.Option(None, "--request-defaults"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Capture a reproducible baseline snapshot for a collection."""
+    configure_logging(verbose)
+    defaults: dict[str, Any] = {}
+    if request_defaults:
+        loaded = read_json(request_defaults)
+        if not isinstance(loaded, dict):
+            raise typer.BadParameter("--request-defaults must point to a JSON object")
+        defaults = loaded
+
+    captured = capture_snapshot(
+        solr_url=solr_url,
+        collection=collection,
+        out_dir=out,
+        request_defaults=defaults,
+        verbose=verbose,
+    )
+    typer.echo(str(captured["paths"]["manifest"]))
 
 
 @shadow_app.command("create")
@@ -280,6 +317,62 @@ def docs_sample(
     typer.echo(f"{out} ({len(docs)} docs, mode={used_mode})")
 
 
+@golden_app.command("add")
+def golden_add(
+    q: str = typer.Option(..., "--q"),
+    expect_id: str = typer.Option(..., "--expect-id"),
+    out: Path = typer.Option(..., "--out"),
+    name: str | None = typer.Option(None, "--name"),
+    def_type: str = typer.Option("edismax", "--def-type"),
+    must_contain_topk: int = typer.Option(10, "--must-contain-topk"),
+) -> None:
+    """Append a golden query entry to JSONL."""
+    entry = GoldenQuery(
+        name=name or q,
+        params={"q": q, "defType": def_type},
+        expected_ids=[expect_id],
+        must_contain_topk=must_contain_topk,
+    )
+    append_golden(out, entry)
+    typer.echo(str(out))
+
+
+@golden_app.command("discover")
+def golden_discover(
+    from_path: Path = typer.Option(..., "--from", exists=True, readable=True),
+    top: int = typer.Option(50, "--top"),
+    out: Path = typer.Option(..., "--out"),
+    format: str = typer.Option("jsonl", "--format"),
+    default_def_type: str = typer.Option("edismax", "--default-def-type"),
+) -> None:
+    """Discover top candidate golden queries from query logs/extractions."""
+    entries = discover_golden_queries(
+        path=from_path,
+        top=top,
+        fmt=format,
+        default_def_type=default_def_type,
+    )
+    write_jsonl(out, [entry.to_dict() for entry in entries])
+    typer.echo(str(out))
+
+
+@ci_app.command("summarize")
+def ci_summarize(
+    compare: Path = typer.Option(..., "--compare", exists=True, readable=True),
+    out: Path = typer.Option(..., "--out"),
+    policy: Path | None = typer.Option(None, "--policy"),
+) -> None:
+    """Generate markdown summary for PR checks/comments."""
+    compare_data = read_json(compare)
+    markdown = build_ci_summary_markdown(
+        compare_data,
+        compare_path=compare.resolve(),
+        policy_path=policy.resolve() if policy else None,
+    )
+    write_text(out, markdown)
+    typer.echo(markdown)
+
+
 @app.command()
 def replay(
     baseline_solr_url: str = typer.Option(..., "--baseline-solr-url"),
@@ -405,6 +498,14 @@ def report(
 def run(
     changeset_path: Path = typer.Argument(..., exists=True, readable=True),
     out: Path = typer.Option(..., "--out"),
+    snapshot: Path | None = typer.Option(
+        None,
+        "--snapshot",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+    ),
     k: int | None = typer.Option(None, "--k"),
     cleanup: bool | None = typer.Option(None, "--cleanup/--no-cleanup"),
     batch_size: int = typer.Option(100, "--batch-size"),
@@ -428,6 +529,11 @@ def run(
             "out_dir": str(out.resolve()),
             "run_manifest": str((out / "run_manifest.json").resolve()),
             "inspect_json": str((out / "inspect.json").resolve()),
+            "snapshot_json": str((out / "snapshot.json").resolve()),
+            "snapshot_schema_json": str((out / "snapshot.schema.json").resolve()),
+            "snapshot_system_json": str((out / "snapshot.system.json").resolve()),
+            "snapshot_collection_json": str((out / "snapshot.collection.json").resolve()),
+            "snapshot_hash_txt": str((out / "snapshot.hash.txt").resolve()),
             "schema_risk_json": str((out / "schema_risk.json").resolve()),
             "shadow_json": str((out / "shadow.json").resolve()),
             "docs_sample_jsonl": str((out / "docs_sample.jsonl").resolve()),
@@ -463,6 +569,7 @@ def run(
             "cleanup": effective_cleanup,
             "sample_n": data_cfg.get("sample_n"),
             "max_queries": query_cfg.get("max_queries"),
+            "git_commit": current_git_commit_short(Path.cwd()),
         }
     )
 
@@ -501,6 +608,8 @@ def run(
     schema_risk_data: dict[str, Any] = {}
     docs_payload: list[dict[str, Any]] = []
     query_cases = []
+    baseline_schema: dict[str, Any] = {}
+    inspect_payload: dict[str, Any] = {}
 
     def stage(name: str):
         class StageCtx:
@@ -522,18 +631,59 @@ def run(
         return StageCtx()
 
     try:
-        with stage("inspect"):
-            inspect_payload = _inspect_collection(
-                baseline_url,
-                baseline_collection,
-                verbose=verbose,
-            )
+        with stage("snapshot"):
+            request_defaults = baseline_cfg.get("request_defaults", {})
+            if snapshot:
+                snapshot_data = load_snapshot(snapshot.resolve())
+                snapshot_manifest = snapshot_data.get("manifest", {})
+                baseline_schema = snapshot_data.get("schema", {})
+                system = snapshot_data.get("system", {})
+                collection_state = snapshot_data.get("collection_state", {})
+                snapshot_hash = str(snapshot_data.get("hash"))
+                inspect_payload = {
+                    "solr_url": baseline_url,
+                    "collection": baseline_collection,
+                    "schema": baseline_schema,
+                    "system_info": system,
+                    "cluster_status": collection_state,
+                    "snapshot_manifest": snapshot_manifest,
+                }
+
+                write_json(Path(manifest.outputs["snapshot_json"]), snapshot_manifest)
+                write_json(Path(manifest.outputs["snapshot_schema_json"]), baseline_schema)
+                write_json(Path(manifest.outputs["snapshot_system_json"]), system)
+                write_json(Path(manifest.outputs["snapshot_collection_json"]), collection_state)
+                write_text(Path(manifest.outputs["snapshot_hash_txt"]), snapshot_hash + "\n")
+                manifest.inputs["snapshot_path"] = str(snapshot.resolve())
+            else:
+                captured = capture_snapshot(
+                    solr_url=baseline_url,
+                    collection=baseline_collection,
+                    out_dir=out,
+                    request_defaults=request_defaults,
+                    verbose=verbose,
+                )
+                snapshot_manifest = captured["manifest"]
+                baseline_schema = captured["schema"]
+                system = captured["system"]
+                collection_state = captured["collection_state"]
+                snapshot_hash = str(snapshot_manifest.get("hash", ""))
+                inspect_payload = {
+                    "solr_url": baseline_url,
+                    "collection": baseline_collection,
+                    "schema": baseline_schema,
+                    "system_info": system,
+                    "cluster_status": collection_state,
+                    "snapshot_manifest": snapshot_manifest,
+                }
+                manifest.inputs["snapshot_path"] = str(out.resolve())
+
             write_json(Path(manifest.outputs["inspect_json"]), inspect_payload)
-            baseline_schema = inspect_payload.get("schema", {})
             manifest.baseline = {
                 "solr_url": baseline_url,
                 "collection": baseline_collection,
                 "schema_hash": _hash_obj(baseline_schema),
+                "snapshot_hash": snapshot_hash,
                 "system_info": inspect_payload.get("system_info", {}),
             }
 
@@ -711,6 +861,13 @@ def run(
                 raise StageError("Shadow name unavailable during replay stage")
             request_defaults = baseline_cfg.get("request_defaults", {})
             merged_defaults = merge_queryparams(request_defaults, changeset.changes)
+            replay_cfg = changeset.replay if hasattr(changeset, "replay") else {}
+            capture_cfg = {}
+            if isinstance(replay_cfg, dict):
+                capture_cfg = replay_cfg.get("capture", {})
+                if not isinstance(capture_cfg, dict):
+                    capture_cfg = {}
+            manifest.settings["replay_capture"] = capture_cfg
             replay_data = run_replay(
                 baseline_client=baseline_client,
                 baseline_collection=baseline_collection,
@@ -719,6 +876,7 @@ def run(
                 queries=query_cases,
                 request_defaults=merged_defaults,
                 k=effective_k,
+                capture_cfg=capture_cfg,
             )
             replay_data["baseline"] = {
                 "solr_url": baseline_url,

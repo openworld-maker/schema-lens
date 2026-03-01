@@ -19,6 +19,7 @@ class QueryResult:
     target: str
     docs: list[QueryDoc] = field(default_factory=list)
     raw_response_meta: dict[str, Any] = field(default_factory=dict)
+    facet_counts: dict[str, dict[str, int]] | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:

@@ -98,6 +98,36 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
     if preflight_fail is not None and not isinstance(preflight_fail, bool):
         report.errors.append("preflight.fail_on_risk must be boolean")
 
+    replay_capture = _get_in(raw, "replay.capture")
+    if replay_capture is not None and not isinstance(replay_capture, dict):
+        report.errors.append("replay.capture must be an object")
+    if isinstance(replay_capture, dict):
+        facets = replay_capture.get("facets")
+        if facets is not None and not isinstance(facets, dict):
+            report.errors.append("replay.capture.facets must be an object")
+        if isinstance(facets, dict):
+            enabled = facets.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                report.errors.append("replay.capture.facets.enabled must be boolean")
+            if facets.get("enabled"):
+                fields = facets.get("fields")
+                if not isinstance(fields, list) or not all(isinstance(x, str) for x in fields):
+                    report.errors.append(
+                        "replay.capture.facets.fields must be a list of strings "
+                        "when facets are enabled"
+                    )
+            limit = facets.get("limit")
+            if limit is not None:
+                try:
+                    if int(limit) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    report.errors.append("replay.capture.facets.limit must be an integer > 0")
+        for field_name in ("track_numfound", "track_sort"):
+            field_val = replay_capture.get(field_name)
+            if field_val is not None and not isinstance(field_val, bool):
+                report.errors.append(f"replay.capture.{field_name} must be boolean")
+
     changes = raw.get("changes", [])
     if not isinstance(changes, list):
         report.errors.append("changes must be a list")

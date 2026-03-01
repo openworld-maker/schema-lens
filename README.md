@@ -3,7 +3,7 @@
 `schema-lens` is a Solr schema/query impact simulator.
 It creates a shadow collection, applies planned changes, replays baseline vs shadow queries, computes relevance diffs, and emits reproducible JSON + HTML reports.
 
-Current version: `v0.1.1`
+Current version: `v0.1.2`
 
 ## Table of contents
 
@@ -60,6 +60,10 @@ Solr schema and query-default changes can silently degrade ranking.
 - Explain capture:
   - classic debug explain
   - structured explain (`debug.explain.structured=true`)
+- Snapshot capture for reproducible runs (`schema-lens snapshot`, `run --snapshot`).
+- Golden query tooling (`schema-lens golden add|discover`).
+- CI markdown summary generator (`schema-lens ci summarize`).
+- Facet/filter/sort stability diagnostics in compare/report outputs.
 - CI quality gate policies with non-zero exit on failure.
 - Reproducible run bundle with manifests and intermediate artifacts.
 
@@ -141,8 +145,10 @@ open out/demo/report.html
   - Validates changeset structure and required fields.
 - `schema-lens inspect --solr-url URL --collection NAME --out PATH`
   - Captures schema/system/cluster snapshot.
-- `schema-lens run <changeset.yaml> --out DIR [--k K] [--cleanup/--no-cleanup]`
+- `schema-lens run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup]`
   - Full orchestration command.
+- `schema-lens snapshot --solr-url URL --collection NAME --out DIR`
+  - Captures deterministic baseline snapshot artifacts.
 - `schema-lens replay ...`
   - Runs baseline vs shadow query replay from explicit inputs.
 - `schema-lens compare --replay PATH --k K --out PATH`
@@ -163,6 +169,9 @@ open out/demo/report.html
   - Exit code `0` pass
   - Exit code `2` gate fail
   - Exit code `1` runtime/config error
+- `schema-lens golden add --q "..." --expect-id DOC123 --out golden.jsonl`
+- `schema-lens golden discover --from queries.jsonl --top 50 --out golden.jsonl`
+- `schema-lens ci summarize --compare compare.json --out summary.md [--policy policy.yaml]`
 
 ## Output artifacts
 
@@ -170,6 +179,11 @@ A full `run` writes a reproducible bundle under `--out`:
 
 - `run_manifest.json`
 - `inspect.json`
+- `snapshot.json`
+- `snapshot.schema.json`
+- `snapshot.system.json`
+- `snapshot.collection.json`
+- `snapshot.hash.txt`
 - `schema_risk.json`
 - `shadow.json`
 - `docs_sample.jsonl` (when Solr doc sampling is enabled)
@@ -185,7 +199,7 @@ Use the canonical spec:
 
 - `docs/changeset-spec.md`
 
-Important v0.1.1 options:
+Important v0.1.2 options:
 
 - `preflight.fail_on_risk`
 - `data.docs_source.type = file | solr`
@@ -193,6 +207,11 @@ Important v0.1.1 options:
 - `queries.sampling.mode = top | reservoir`
 - `queries.sanitize.rules` for PII/token stripping
 - `evaluation.explain.structured`
+- `replay.capture.facets.enabled`
+- `replay.capture.facets.fields`
+- `replay.capture.facets.limit`
+- `replay.capture.track_numfound`
+- `replay.capture.track_sort`
 
 Supported operations:
 
@@ -207,6 +226,19 @@ Supported operations:
 
 ```bash
 schema-lens run examples/changesets/prod_realism_example.yaml --out out/prod_like_run
+```
+
+### Create a baseline snapshot and replay against it later
+
+```bash
+schema-lens snapshot \
+  --solr-url http://localhost:8983/solr \
+  --collection products \
+  --out out/snap_products
+
+schema-lens run examples/changesets/prod_realism_example.yaml \
+  --snapshot out/snap_products \
+  --out out/prod_like_run_from_snapshot
 ```
 
 ### Extract canonical replay queries from logs
@@ -248,12 +280,22 @@ Typical CI usage:
 
 1. Run `schema-lens run ...`
 2. Run `schema-lens gate ...`
-3. Fail pipeline on exit code `2`
+3. Run `schema-lens ci summarize ...`
+4. Fail pipeline on exit code `2`
 
 Included policy examples:
 
 - `examples/policy/gate_default.yaml`
 - `examples/queries/golden.jsonl`
+
+Generate summary markdown:
+
+```bash
+schema-lens ci summarize \
+  --compare out/prod_like_run/compare.json \
+  --policy examples/policy/gate_default.yaml \
+  --out out/prod_like_run/summary.md
+```
 
 ## Testing and validation
 

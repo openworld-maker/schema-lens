@@ -24,6 +24,8 @@ for item in "${SCENARIOS[@]}"; do
   test -s "$out_dir/report.json"
   test -s "$out_dir/report.html"
   test -s "$out_dir/schema_risk.json"
+  test -s "$out_dir/snapshot.json"
+  test -s "$out_dir/snapshot.hash.txt"
 
   python3 - <<PY
 import json
@@ -65,5 +67,22 @@ if [[ "$gate_rc" -ne 2 ]]; then
   echo "expected gate fail exit code 2, got $gate_rc"
   exit 1
 fi
+
+.venv/bin/schema-lens ci summarize --compare "$RUN_ROOT/prod_realism/compare.json" --out "$RUN_ROOT/prod_realism/summary.md"
+test -s "$RUN_ROOT/prod_realism/summary.md"
+
+python3 - <<PY
+import json
+path = "$RUN_ROOT/prod_realism/compare.json"
+data = json.load(open(path))
+diffs = data.get("diffs", [])
+if not diffs:
+    raise SystemExit("no diffs")
+sample = diffs[0]
+required = ["numfound_delta", "sort_instability_ratio", "facet_diffs"]
+for key in required:
+    if key not in sample:
+        raise SystemExit(f"missing key in compare diff: {key}")
+PY
 
 echo "Smoke matrix completed: $RUN_ROOT"

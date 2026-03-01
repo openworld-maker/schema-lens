@@ -1,4 +1,4 @@
-# Changeset Spec v0.1
+# Changeset Spec v0.1.2
 
 ```yaml
 schema_lens_version: 1
@@ -64,6 +64,15 @@ queries:
 preflight:
   fail_on_risk: false
 
+replay:
+  capture:
+    facets:
+      enabled: true
+      fields: ["category", "brand"]
+      limit: 20
+    track_numfound: true
+    track_sort: true
+
 changes:
   - op: "schema.field.update"
     field: "title"
@@ -115,6 +124,8 @@ evaluation:
 - `queries.source.type=log` enables log extraction + canonical JSONL replay generation.
 - `data.docs_source.type=solr` samples docs from Solr and writes reproducible JSONL output.
 - Preflight always emits `schema_risk.json`; set `preflight.fail_on_risk=true` to block execution on HIGH risks.
+- `replay.capture.facets.enabled=true` captures classic Solr facet counts during replay.
+- `replay.capture.track_numfound` and `replay.capture.track_sort` enable extra diagnostics in compare/report output.
 - `schema.analyzer.remove_filter.filter_class` can be a Java class (for example `solr.LowerCaseFilterFactory`) or the short filter name (`lowercase`).
 - `shadow.allow_shared_configset_fallback=true` allows a non-isolated fallback when Solr blocks configset clone operations (401 on trusted base configsets). This is explicit and can affect baseline behavior.
 - Empty `changes` is allowed with a warning.

@@ -39,3 +39,7 @@ class Changeset:
     @property
     def evaluation(self) -> dict[str, Any]:
         return self.raw.get("evaluation", {})
+
+    @property
+    def replay(self) -> dict[str, Any]:
+        return self.raw.get("replay", {})

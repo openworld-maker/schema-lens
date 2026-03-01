@@ -104,7 +104,9 @@ def _evaluate_golden(
     rows = _read_golden_queries(file_path)
 
     requirements = golden_cfg.get("requirements", {})
-    must_contain_topk = int(requirements.get("must_contain_topk", compare_data.get("k", 10)))
+    default_must_contain_topk = int(
+        requirements.get("must_contain_topk", compare_data.get("k", 10))
+    )
     max_missing_pct = float(requirements.get("max_missing_pct", 0.0))
 
     by_fingerprint = {
@@ -128,6 +130,11 @@ def _evaluate_golden(
             missing_pct = 100.0
             shadow_topk = []
         else:
+            row_topk = row.get("must_contain_topk", default_must_contain_topk)
+            try:
+                must_contain_topk = int(row_topk)
+            except (TypeError, ValueError):
+                must_contain_topk = default_must_contain_topk
             shadow_topk = [str(x) for x in diff.get("shadow_topk_ids", [])][:must_contain_topk]
             missing = [doc_id for doc_id in expected_ids if doc_id not in shadow_topk]
             missing_pct = len(missing) / len(expected_ids) * 100.0

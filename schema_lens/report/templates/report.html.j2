@@ -55,6 +55,8 @@
       <h1>Schema Lens Report</h1>
       <p class="muted">Run ID: {{ report.run_manifest.run_id }}</p>
       <p class="muted">Started: {{ report.run_manifest.started_at }} | Ended: {{ report.run_manifest.ended_at }}</p>
+      <p class="muted">Snapshot Hash: {{ report.run_manifest.baseline.snapshot_hash if report.run_manifest.baseline else "n/a" }}</p>
+      <p class="muted">Git Commit: {{ report.run_manifest.settings.git_commit if report.run_manifest.settings else "n/a" }}</p>
     </div>
 
     <div class="card">
@@ -64,6 +66,9 @@
         <tr><th>Failures</th><td>{{ report.summary.failures }}</td></tr>
         <tr><th>Average Overlap</th><td>{{ "%.2f"|format(report.summary.avg_overlap) }}</td></tr>
         <tr><th>High Risk %</th><td>{{ "%.2f"|format(report.summary.high_risk_percent) }}</td></tr>
+        <tr><th>Avg numFound Delta</th><td>{{ "%.2f"|format(report.summary.avg_numfound_delta) }}</td></tr>
+        <tr><th>Avg Sort Instability</th><td>{{ "%.3f"|format(report.summary.avg_sort_instability_ratio) }}</td></tr>
+        <tr><th>Queries With Facet Changes %</th><td>{{ "%.2f"|format(report.summary.queries_with_facet_changes_percent) }}</td></tr>
       </table>
     </div>
 
@@ -78,6 +83,8 @@
             <th>Overlap</th>
             <th>Jaccard</th>
             <th>Kendall Tau</th>
+            <th>numFound Δ</th>
+            <th>Sort Instability</th>
           </tr>
         </thead>
         <tbody>
@@ -89,6 +96,8 @@
             <td>{{ row.overlap }}</td>
             <td>{{ "%.3f"|format(row.jaccard) if row.jaccard is not none else "n/a" }}</td>
             <td>{{ "%.3f"|format(row.kendall_tau) if row.kendall_tau is not none else "n/a" }}</td>
+            <td>{{ row.numfound_delta if row.numfound_delta is not none else "n/a" }}</td>
+            <td>{{ "%.3f"|format(row.sort_instability_ratio) if row.sort_instability_ratio is not none else "n/a" }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -122,6 +131,18 @@
       {% for diff in report.per_query_diffs %}
       <details>
         <summary>Query {{ diff.query_id }} | {{ diff.raw_line }} | Risk {{ diff.risk_severity }}</summary>
+        <p class="muted">
+          numFound: baseline={{ diff.numfound_baseline if diff.numfound_baseline is not none else "n/a" }},
+          shadow={{ diff.numfound_shadow if diff.numfound_shadow is not none else "n/a" }},
+          delta={{ diff.numfound_delta if diff.numfound_delta is not none else "n/a" }},
+          sort instability={{ "%.3f"|format(diff.sort_instability_ratio) if diff.sort_instability_ratio is not none else "n/a" }}
+        </p>
+        {% if diff.facet_diffs %}
+        <details>
+          <summary>Facet Diffs</summary>
+          <pre>{{ diff.facet_diffs }}</pre>
+        </details>
+        {% endif %}
         <pre>{{ diff }}</pre>
       </details>
       {% endfor %}

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from schema_lens.compare.facets import compute_facet_diff
 from schema_lens.compare.metrics import jaccard_at_k, kendall_tau_at_k, overlap_at_k
+from schema_lens.compare.numfound import numfound_delta
+from schema_lens.compare.sort import sort_instability_ratio
 
 
 def _risk_for(overlap: int, tau: float | None, k: int) -> tuple[str, list[str]]:
@@ -42,6 +45,8 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
 
         baseline_error = baseline.get("error")
         shadow_error = shadow.get("error")
+        baseline_meta = baseline.get("raw_response_meta", {})
+        shadow_meta = shadow.get("raw_response_meta", {})
 
         base_docs = baseline.get("docs", [])
         shadow_docs = shadow.get("docs", [])
@@ -52,6 +57,16 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
         overlap = overlap_at_k(base_ids, shadow_ids)
         jaccard = jaccard_at_k(base_ids, shadow_ids)
         tau = kendall_tau_at_k(base_ids, shadow_ids)
+        instability = sort_instability_ratio(base_ids, shadow_ids)
+        num_base, num_shadow, num_delta = numfound_delta(baseline_meta, shadow_meta)
+
+        base_facets = baseline.get("facet_counts", {})
+        shadow_facets = shadow.get("facet_counts", {})
+        if not isinstance(base_facets, dict):
+            base_facets = {}
+        if not isinstance(shadow_facets, dict):
+            shadow_facets = {}
+        facet_diffs = compute_facet_diff(base_facets, shadow_facets)
 
         rank_b = {doc_id: idx + 1 for idx, doc_id in enumerate(base_ids)}
         rank_s = {doc_id: idx + 1 for idx, doc_id in enumerate(shadow_ids)}
@@ -107,6 +122,11 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
                 "shadow_topk_ids": shadow_ids,
                 "topk_overlap_count": overlap,
                 "overlap_ratio": overlap / k if k else 0.0,
+                "numfound_baseline": num_base,
+                "numfound_shadow": num_shadow,
+                "numfound_delta": num_delta,
+                "sort_instability_ratio": instability,
+                "facet_diffs": facet_diffs,
                 "jaccard": jaccard,
                 "kendall_tau": tau,
                 "moved_docs": moved_docs,
@@ -131,6 +151,34 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
     avg_overlap_ratio = (
         sum(d.get("overlap_ratio", 0.0) for d in diffs) / total if total else 0.0
     )
+    numfound_deltas = [
+        d.get("numfound_delta")
+        for d in diffs
+        if d.get("numfound_delta") is not None
+    ]
+    avg_numfound_delta = (
+        sum(float(x) for x in numfound_deltas) / len(numfound_deltas) if numfound_deltas else 0.0
+    )
+    avg_sort_instability = (
+        sum(d.get("sort_instability_ratio", 0.0) for d in diffs) / total if total else 0.0
+    )
+    with_facet_change = 0
+    for diff in diffs:
+        fd = diff.get("facet_diffs", {})
+        has_change = False
+        if isinstance(fd, dict):
+            for _, section in fd.items():
+                if not isinstance(section, dict):
+                    continue
+                if (
+                    section.get("new_values")
+                    or section.get("missing_values")
+                    or section.get("top_deltas")
+                ):
+                    has_change = True
+                    break
+        if has_change:
+            with_facet_change += 1
 
     ranked = sorted(
         diffs,
@@ -147,6 +195,11 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
             "queries_total": total,
             "avg_overlap": avg_overlap,
             "avg_overlap_ratio": avg_overlap_ratio,
+            "avg_numfound_delta": avg_numfound_delta,
+            "avg_sort_instability_ratio": avg_sort_instability,
+            "queries_with_facet_changes_percent": (with_facet_change / total * 100.0)
+            if total
+            else 0.0,
             "high_risk_percent": (high / total * 100.0) if total else 0.0,
             "med_risk_percent": (medium / total * 100.0) if total else 0.0,
         },

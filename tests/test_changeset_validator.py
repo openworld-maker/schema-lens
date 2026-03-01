@@ -87,3 +87,47 @@ def test_validator_accepts_solr_doc_source_without_path(tmp_path):
     }
     report = validate_changeset(Changeset(raw=data), check_paths=True)
     assert report.ok
+
+
+def test_validator_accepts_replay_capture_config(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "replay": {
+            "capture": {
+                "facets": {"enabled": True, "fields": ["category"], "limit": 20},
+                "track_numfound": True,
+                "track_sort": True,
+            }
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_replay_capture_fields(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "replay": {
+            "capture": {
+                "facets": {"enabled": True, "fields": "bad", "limit": 0},
+                "track_numfound": "yes",
+            }
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert not report.ok
+    assert any("replay.capture.facets.fields" in err for err in report.errors)
