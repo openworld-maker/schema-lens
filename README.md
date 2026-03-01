@@ -2,7 +2,7 @@
 
 Schema Lens is a Solr schema evolution impact simulator. It compares baseline vs shadow relevance before you ship schema/query changes.
 
-Target first release: `v0.1.0`.
+Target release: `v0.1.1`.
 
 ## Why
 
@@ -11,6 +11,7 @@ Schema and query parameter changes can silently degrade ranking quality. `schema
 ## Features (v0.1)
 
 - CLI commands: `validate`, `inspect`, `shadow create`, `shadow index`, `replay`, `compare`, `report`, `run`
+- Additional commands: `queries extract`, `docs sample`, `gate`
 - SolrCloud-first shadow collection lifecycle via Collections API
 - Schema change operations:
   - `schema.field.update`
@@ -18,6 +19,12 @@ Schema and query parameter changes can silently degrade ranking quality. `schema
   - `schema.analyzer.remove_filter`
   - `queryparams.set`
 - Query replay and metrics: overlap@K, jaccard@K, kendall tau@K
+- Schema preflight dependency/risk report: `schema_risk.json`
+- Optional production realism sources:
+  - Queries from logs (`queries.source.type=log`)
+  - Docs sampled directly from Solr (`data.docs_source.type=solr`)
+- Optional structured explain capture (`evaluation.explain.structured=true`)
+- Quality gate policy command for CI (`schema-lens gate`)
 - Reproducible outputs: `run_manifest.json`, `replay.json`, `compare.json`, `report.json`, `report.html`
 
 ## Quickstart
@@ -49,6 +56,50 @@ schema-lens run examples/changesets/fieldtype-change.yaml --out out/demo
 ```bash
 cat out/demo/report.json
 ```
+
+## Run Against Production Safely
+
+Use the production realism example:
+
+```bash
+schema-lens run examples/changesets/prod_realism_example.yaml --out out/prod_like_run
+```
+
+Extract canonical replay queries from logs:
+
+```bash
+schema-lens queries extract \
+  --from examples/logs/solr_requests.log \
+  --out out/queries_extracted.jsonl \
+  --max 500 \
+  --sample reservoir
+```
+
+Sample docs from Solr:
+
+```bash
+schema-lens docs sample \
+  --solr-url http://localhost:8983/solr \
+  --collection products \
+  --mode cursormark \
+  --query "*:*" \
+  --fl "id,title,text,category,price" \
+  --sample-n 5000 \
+  --out out/docs_sample.jsonl
+```
+
+Apply CI relevance gate:
+
+```bash
+schema-lens gate \
+  --compare out/prod_like_run/compare.json \
+  --policy examples/policy/gate_default.yaml
+```
+
+Warnings:
+- Keep sampled docs lean (`fl`) and bounded (`sample_n`).
+- Keep sanitization enabled when replaying from real logs.
+- Review `schema_risk.json` before approving schema rollout.
 
 ## Example command
 

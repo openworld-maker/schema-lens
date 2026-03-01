@@ -46,6 +46,15 @@ def test_load_queries_jsonl_format(tmp_path: Path):
     assert cases[1].params["fq"] == "cat:x"
 
 
+def test_load_queries_jsonl_wrapped_params(tmp_path: Path):
+    query_file = tmp_path / "queries_wrapped.jsonl"
+    query_file.write_text('{"params":{"q":"foo","fq":["cat:x"]}}\n', encoding="utf-8")
+    cases = load_queries(query_file, fmt="jsonl")
+    assert len(cases) == 1
+    assert cases[0].params["q"] == "foo"
+    assert cases[0].params["fq"] == ["cat:x"]
+
+
 def test_load_queries_jsonl_invalid_line(tmp_path: Path):
     query_file = tmp_path / "queries.jsonl"
     query_file.write_text("{bad}\n", encoding="utf-8")

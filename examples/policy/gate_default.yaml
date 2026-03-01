@@ -1,0 +1,28 @@
+version: 1
+k: 10
+
+fail:
+  - metric: "avg_overlap"
+    op: "<"
+    value: 0.80
+  - metric: "pct_high_risk_queries"
+    op: ">"
+    value: 5.0
+  - metric: "pct_queries_overlap_lt"
+    args:
+      threshold: 0.60
+    op: ">"
+    value: 10.0
+
+warn:
+  - metric: "pct_med_risk_queries"
+    op: ">"
+    value: 20.0
+
+golden_queries:
+  enabled: true
+  file: "../queries/golden.jsonl"
+  requirements:
+    must_contain_topk: 10
+    max_missing_pct: 0.0
+

@@ -16,26 +16,36 @@ from schema_lens.changesets.parser import parse_changeset
 from schema_lens.changesets.validator import validate_changeset
 from schema_lens.compare.diff import compare_replay
 from schema_lens.compare.explain_fetcher import fetch_explains
+from schema_lens.compare.gate import evaluate_gate, load_gate_policy
 from schema_lens.config import RunManifest
 from schema_lens.data.docs_loader import load_docs
+from schema_lens.data.solr_sampler import sample_docs_from_solr
 from schema_lens.errors import StageError
 from schema_lens.http.client import SolrHttpClient
 from schema_lens.logging import configure_logging
 from schema_lens.queries.loader import load_queries
+from schema_lens.queries.sampler import sample_queries
+from schema_lens.queries.sanitize import sanitize_params
+from schema_lens.queries.sources.solr_request_log import extract_queries_from_log
 from schema_lens.replay.runner import run_replay
 from schema_lens.report.html_report import render_html_report
 from schema_lens.report.json_report import build_report_json
+from schema_lens.schema.preflight import run_preflight
 from schema_lens.shadow.manager import cleanup_shadow, create_shadow
 from schema_lens.solr.admin_api import system_info
 from schema_lens.solr.collections_api import cluster_status
 from schema_lens.solr.schema_api import get_schema
 from schema_lens.solr.update_api import post_docs
-from schema_lens.util.io import ensure_dir, read_json, write_json, write_text
+from schema_lens.util.io import ensure_dir, read_json, write_json, write_jsonl, write_text
 from schema_lens.util.time import utc_now_iso
 
 app = typer.Typer(help="Schema Lens: Solr schema evolution impact simulator")
 shadow_app = typer.Typer(help="Shadow collection operations")
+queries_app = typer.Typer(help="Query source operations")
+docs_app = typer.Typer(help="Document source operations")
 app.add_typer(shadow_app, name="shadow")
+app.add_typer(queries_app, name="queries")
+app.add_typer(docs_app, name="docs")
 
 
 def _hash_obj(data: Any) -> str:
@@ -206,6 +216,70 @@ def shadow_index(
     typer.echo(f"Indexed {indexed} docs")
 
 
+@queries_app.command("extract")
+def queries_extract(
+    from_path: Path = typer.Option(..., "--from", exists=True, readable=True),
+    out: Path = typer.Option(..., "--out"),
+    max_queries: int | None = typer.Option(None, "--max"),
+    sample: str = typer.Option("reservoir", "--sample"),
+    seed: int | None = typer.Option(None, "--seed"),
+    sanitize: bool = typer.Option(True, "--sanitize/--no-sanitize"),
+    format: str = typer.Option("solr_params", "--format"),
+) -> None:
+    """Extract canonical replay queries from request logs."""
+    rows = extract_queries_from_log(from_path, fmt=format)
+    sanitized_rows = []
+    for row in rows:
+        params = row.get("params", {})
+        if isinstance(params, dict):
+            row = dict(row)
+            row["params"] = sanitize_params(params, enabled=sanitize)
+            sanitized_rows.append(row)
+
+    sampled = sample_queries(
+        sanitized_rows,
+        mode=sample,
+        max_queries=max_queries,
+        seed=seed,
+    )
+    write_jsonl(out, sampled)
+    typer.echo(str(out))
+
+
+@docs_app.command("sample")
+def docs_sample(
+    solr_url: str = typer.Option(..., "--solr-url"),
+    collection: str = typer.Option(..., "--collection"),
+    mode: str = typer.Option("cursormark", "--mode"),
+    query: str = typer.Option("*:*", "--query"),
+    fl: str = typer.Option("*", "--fl"),
+    sort: str = typer.Option("id asc", "--sort"),
+    sample_n: int = typer.Option(50000, "--sample-n"),
+    batch_size: int = typer.Option(500, "--batch-size"),
+    out: Path = typer.Option(..., "--out"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Sample documents from Solr and persist as JSONL."""
+    configure_logging(verbose)
+    client = SolrHttpClient(solr_url, verbose=verbose)
+    try:
+        docs, used_mode = sample_docs_from_solr(
+            client=client,
+            collection=collection,
+            mode=mode,
+            query=query,
+            fl=fl,
+            sort=sort,
+            sample_n=sample_n,
+            batch_size=batch_size,
+        )
+    finally:
+        client.close()
+
+    write_jsonl(out, docs)
+    typer.echo(f"{out} ({len(docs)} docs, mode={used_mode})")
+
+
 @app.command()
 def replay(
     baseline_solr_url: str = typer.Option(..., "--baseline-solr-url"),
@@ -262,6 +336,29 @@ def compare(
     compare_data = compare_replay(replay_data, k=k)
     write_json(out, compare_data)
     typer.echo(str(out))
+
+
+@app.command()
+def gate(
+    compare: Path = typer.Option(..., "--compare", exists=True, readable=True),
+    policy: Path = typer.Option(..., "--policy", exists=True, readable=True),
+) -> None:
+    """Evaluate a relevance quality gate policy against compare output."""
+    try:
+        compare_data = read_json(compare)
+        policy_data = load_gate_policy(policy)
+        result = evaluate_gate(
+            compare_data=compare_data,
+            policy_data=policy_data,
+            policy_dir=policy.parent.resolve(),
+        )
+    except Exception as exc:  # noqa: BLE001
+        typer.echo(f"Gate evaluation failed: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(json.dumps(result, indent=2))
+    if not result.get("pass", False):
+        raise typer.Exit(code=2)
 
 
 @app.command()
@@ -331,7 +428,10 @@ def run(
             "out_dir": str(out.resolve()),
             "run_manifest": str((out / "run_manifest.json").resolve()),
             "inspect_json": str((out / "inspect.json").resolve()),
+            "schema_risk_json": str((out / "schema_risk.json").resolve()),
             "shadow_json": str((out / "shadow.json").resolve()),
+            "docs_sample_jsonl": str((out / "docs_sample.jsonl").resolve()),
+            "queries_extracted_jsonl": str((out / "queries_extracted.jsonl").resolve()),
             "replay_json": str((out / "replay.json").resolve()),
             "compare_json": str((out / "compare.json").resolve()),
             "report_json": str((out / "report.json").resolve()),
@@ -368,16 +468,28 @@ def run(
 
     docs_source = data_cfg.get("docs_source", {})
     queries_source = query_cfg.get("source", {})
-
-    docs_path = _resolve_path(changeset_path, docs_source["path"])
-    queries_path = _resolve_path(changeset_path, queries_source["path"])
+    docs_source_type = str(docs_source.get("type", "file"))
+    query_source_type = str(queries_source.get("type", "file"))
 
     manifest.inputs.update(
         {
-            "docs_path": str(docs_path),
+            "doc_source_type": docs_source_type,
+            "query_source_type": query_source_type,
+        }
+    )
+
+    docs_path: Path | None = None
+    if docs_source_type == "file":
+        docs_path = _resolve_path(changeset_path, docs_source["path"])
+
+    queries_path = _resolve_path(changeset_path, queries_source["path"])
+    manifest.inputs.update(
+        {
             "queries_path": str(queries_path),
         }
     )
+    if docs_path:
+        manifest.inputs["docs_path"] = str(docs_path)
 
     baseline_client = SolrHttpClient(baseline_url, verbose=verbose)
     shadow_client = SolrHttpClient(shadow_url, verbose=verbose)
@@ -386,6 +498,9 @@ def run(
     shadow_name: str | None = None
     replay_data: dict[str, Any] = {}
     compare_data: dict[str, Any] = {}
+    schema_risk_data: dict[str, Any] = {}
+    docs_payload: list[dict[str, Any]] = []
+    query_cases = []
 
     def stage(name: str):
         class StageCtx:
@@ -422,6 +537,22 @@ def run(
                 "system_info": inspect_payload.get("system_info", {}),
             }
 
+        with stage("preflight"):
+            preflight_cfg = changeset.raw.get("preflight", {})
+            fail_on_risk = bool(preflight_cfg.get("fail_on_risk", False))
+            schema_risk_data = run_preflight(
+                baseline_schema,
+                changeset.changes,
+                fail_on_risk=fail_on_risk,
+            )
+            write_json(Path(manifest.outputs["schema_risk_json"]), schema_risk_data)
+            manifest.settings["preflight"] = {
+                "fail_on_risk": fail_on_risk,
+                "summary": schema_risk_data.get("summary", {}),
+            }
+            if schema_risk_data.get("block_run"):
+                raise StageError("preflight blocked run due to HIGH schema risks")
+
         with stage("shadow_create"):
             shadow_manifest = create_shadow(
                 client=shadow_client,
@@ -446,16 +577,72 @@ def run(
                 "warnings": shadow_manifest.warnings,
             }
 
+        with stage("docs_sample_or_load"):
+            if docs_source_type == "file":
+                if docs_path is None:
+                    raise StageError("docs path unavailable for file source")
+                docs_payload = load_docs(
+                    docs_path,
+                    fmt=docs_source.get("format"),
+                    id_field=docs_source.get("id_field", "id"),
+                    sample_n=data_cfg.get("sample_n"),
+                )
+            else:
+                source_url = str(docs_source.get("solr_url", baseline_url))
+                source_collection = str(docs_source.get("collection", baseline_collection))
+                source_mode = str(docs_source.get("mode", "cursormark"))
+                source_query = str(docs_source.get("query", "*:*"))
+                source_fl = str(docs_source.get("fl", "*"))
+                source_sort = str(docs_source.get("sort", "id asc"))
+                source_sample_n = int(docs_source.get("sample_n", data_cfg.get("sample_n", 50000)))
+                source_batch_size = int(docs_source.get("batch_size", batch_size))
+
+                out_sample_path = docs_source.get("out_sample_path")
+                if isinstance(out_sample_path, str):
+                    sample_path = Path(out_sample_path)
+                    if not sample_path.is_absolute():
+                        sample_path = (Path.cwd() / sample_path).resolve()
+                else:
+                    sample_path = Path(manifest.outputs["docs_sample_jsonl"])
+
+                docs_client = SolrHttpClient(source_url, verbose=verbose)
+                try:
+                    docs_payload, used_mode = sample_docs_from_solr(
+                        client=docs_client,
+                        collection=source_collection,
+                        mode=source_mode,
+                        query=source_query,
+                        fl=source_fl,
+                        sort=source_sort,
+                        sample_n=source_sample_n,
+                        batch_size=source_batch_size,
+                    )
+                finally:
+                    docs_client.close()
+
+                write_jsonl(sample_path, docs_payload)
+                manifest.inputs["docs_sample_path"] = str(sample_path.resolve())
+                manifest.settings["doc_sampling"] = {
+                    "solr_url": source_url,
+                    "collection": source_collection,
+                    "mode_requested": source_mode,
+                    "mode_used": used_mode,
+                    "query": source_query,
+                    "fl": source_fl,
+                    "sort": source_sort,
+                    "sample_n": source_sample_n,
+                    "batch_size": source_batch_size,
+                }
+
         with stage("index"):
-            docs = load_docs(
-                docs_path,
-                fmt=docs_source.get("format"),
-                id_field=docs_source.get("id_field", "id"),
-                sample_n=data_cfg.get("sample_n"),
-            )
             if not shadow_name:
                 raise StageError("Shadow name unavailable during indexing stage")
-            indexed = _index_in_batches(shadow_client, shadow_name, docs, batch_size=batch_size)
+            indexed = _index_in_batches(
+                shadow_client,
+                shadow_name,
+                docs_payload,
+                batch_size=batch_size,
+            )
             manifest.stats["docs_indexed"] = indexed
 
             shadow_json_path = Path(manifest.outputs["shadow_json"])
@@ -463,12 +650,65 @@ def run(
             existing_shadow_manifest["docs_indexed"] = indexed
             write_json(shadow_json_path, existing_shadow_manifest)
 
+        with stage("queries_extract_or_load"):
+            if query_source_type == "file":
+                query_cases = load_queries(
+                    queries_path,
+                    fmt=queries_source.get("format", "simple"),
+                    max_queries=query_cfg.get("max_queries"),
+                )
+            else:
+                extracted_rows = extract_queries_from_log(
+                    queries_path,
+                    fmt=str(queries_source.get("format", "solr_params")),
+                )
+                sanitize_cfg = query_cfg.get("sanitize", {})
+                if not isinstance(sanitize_cfg, dict):
+                    sanitize_cfg = {}
+                sanitize_enabled = bool(sanitize_cfg.get("enabled", True))
+                sanitize_rules = sanitize_cfg.get("rules")
+
+                cleaned_rows = []
+                for row in extracted_rows:
+                    params = row.get("params", {})
+                    if not isinstance(params, dict):
+                        continue
+                    cleaned_rows.append(
+                        {
+                            **row,
+                            "params": sanitize_params(
+                                params,
+                                enabled=sanitize_enabled,
+                                rules=sanitize_rules if isinstance(sanitize_rules, list) else None,
+                            ),
+                        }
+                    )
+
+                sampling_cfg = query_cfg.get("sampling", {})
+                if not isinstance(sampling_cfg, dict):
+                    sampling_cfg = {}
+                sampling_mode = str(sampling_cfg.get("mode", "reservoir"))
+                sampling_seed = sampling_cfg.get("seed")
+
+                sampled_rows = sample_queries(
+                    cleaned_rows,
+                    mode=sampling_mode,
+                    max_queries=query_cfg.get("max_queries"),
+                    seed=sampling_seed if isinstance(sampling_seed, int) else None,
+                )
+                extracted_path = Path(manifest.outputs["queries_extracted_jsonl"])
+                write_jsonl(extracted_path, sampled_rows)
+                manifest.inputs["queries_extracted_path"] = str(extracted_path.resolve())
+                manifest.settings["query_sampling"] = {
+                    "mode": sampling_mode,
+                    "seed": sampling_seed,
+                    "sanitize_enabled": sanitize_enabled,
+                }
+                query_cases = load_queries(extracted_path, fmt="jsonl")
+
         with stage("replay"):
-            query_cases = load_queries(
-                queries_path,
-                fmt=queries_source.get("format", "simple"),
-                max_queries=query_cfg.get("max_queries"),
-            )
+            if not shadow_name:
+                raise StageError("Shadow name unavailable during replay stage")
             request_defaults = baseline_cfg.get("request_defaults", {})
             merged_defaults = merge_queryparams(request_defaults, changeset.changes)
             replay_data = run_replay(
@@ -494,6 +734,7 @@ def run(
 
         with stage("compare"):
             compare_data = compare_replay(replay_data, effective_k)
+            compare_data["schema_safety_findings"] = schema_risk_data
             write_json(Path(manifest.outputs["compare_json"]), compare_data)
 
         with stage("explain"):
@@ -509,6 +750,7 @@ def run(
                     k=effective_k,
                     max_queries=int(explain_cfg.get("max_queries", 25)),
                     max_docs_per_query=int(explain_cfg.get("max_docs_per_query", 3)),
+                    structured=bool(explain_cfg.get("structured", False)),
                 )
                 compare_data["explain_bundles"] = bundles
                 write_json(Path(manifest.outputs["compare_json"]), compare_data)

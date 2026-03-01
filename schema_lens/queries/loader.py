@@ -95,6 +95,8 @@ def load_queries(
                     raise ValidationError(f"Invalid JSONL query at line {line_no}") from exc
                 if not isinstance(params, dict):
                     raise ValidationError(f"JSONL query at line {line_no} must be object")
+                if isinstance(params.get("params"), dict):
+                    params = params["params"]
                 case = QueryCase(
                     id=len(cases) + 1,
                     line_no=line_no,

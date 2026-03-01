@@ -67,3 +67,23 @@ def test_validator_rejects_unsupported_version():
     report = validate_changeset(Changeset(raw=data), check_paths=False)
     assert not report.ok
     assert any("Unsupported schema_lens_version" in err for err in report.errors)
+
+
+def test_validator_accepts_solr_doc_source_without_path(tmp_path):
+    queries = tmp_path / "queries.log"
+    queries.write_text("q=foo\n", encoding="utf-8")
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {
+            "docs_source": {
+                "type": "solr",
+                "solr_url": "http://localhost:8983/solr",
+                "collection": "products",
+                "mode": "cursormark",
+            }
+        },
+        "queries": {"source": {"type": "log", "path": str(queries), "format": "solr_params"}},
+        "changes": [],
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok

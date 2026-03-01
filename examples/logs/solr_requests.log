@@ -1,0 +1,4 @@
+q=bearings&fq=category:tools&defType=edismax&qf=title%5E3%20text&rows=20
+q=pipes&fq=price:%5B10%20TO%2050%5D&sort=price%20asc
+/browse/select?q=bolts&fq=tenant:acme&mm=2<75%25&pf=title%5E10&debug=false
+

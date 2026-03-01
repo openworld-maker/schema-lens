@@ -26,18 +26,43 @@ shadow:
 
 data:
   docs_source:
-    type: "file"
-    path: "examples/docs.jsonl"
+    type: "file" # "file" | "solr"
+    path: "examples/docs.jsonl" # required for type=file
     format: "jsonl"
     id_field: "id"
+    # solr source options (type=solr):
+    # solr_url: "http://localhost:8983/solr"
+    # collection: "products"
+    # mode: "export" # "export" | "cursormark"
+    # query: "*:*"
+    # sort: "id asc"
+    # fl: "id,title,text,category"
+    # sample_n: 50000
+    # batch_size: 500
+    # out_sample_path: "out/docs_sample.jsonl"
   sample_n: 50000
 
 queries:
   source:
-    type: "file"
+    type: "file" # "file" | "log"
     path: "examples/queries.txt"
-    format: "simple"
+    format: "simple" # file: "simple" | "jsonl", log: "solr_params" | "jsonl"
   max_queries: 2000
+  sampling:
+    mode: "reservoir" # "top" | "reservoir"
+    seed: 42
+  sanitize:
+    enabled: true
+    rules:
+      - type: "mask_email"
+      - type: "mask_uuid"
+      - type: "drop_param"
+        name: "token"
+      - type: "drop_param"
+        name: "auth"
+
+preflight:
+  fail_on_risk: false
 
 changes:
   - op: "schema.field.update"
@@ -64,6 +89,7 @@ evaluation:
     - kendall_tau
   explain:
     enabled: true
+    structured: false
     max_queries: 25
     max_docs_per_query: 3
 ```
@@ -72,7 +98,8 @@ evaluation:
 
 - `baseline.solr_url`
 - `baseline.collection`
-- `data.docs_source.path`
+- `data.docs_source.path` when `data.docs_source.type=file`
+- `data.docs_source.solr_url` and `data.docs_source.collection` when `data.docs_source.type=solr`
 - `queries.source.path`
 
 ## Supported operations
@@ -85,6 +112,9 @@ evaluation:
 ## Notes
 
 - `queryparams.set` affects replay parameters only.
+- `queries.source.type=log` enables log extraction + canonical JSONL replay generation.
+- `data.docs_source.type=solr` samples docs from Solr and writes reproducible JSONL output.
+- Preflight always emits `schema_risk.json`; set `preflight.fail_on_risk=true` to block execution on HIGH risks.
 - `schema.analyzer.remove_filter.filter_class` can be a Java class (for example `solr.LowerCaseFilterFactory`) or the short filter name (`lowercase`).
 - `shadow.allow_shared_configset_fallback=true` allows a non-isolated fallback when Solr blocks configset clone operations (401 on trusted base configsets). This is explicit and can affect baseline behavior.
 - Empty `changes` is allowed with a warning.

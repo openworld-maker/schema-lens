@@ -71,3 +71,38 @@ def test_fetch_explains_filters_low_risk_and_handles_failures(monkeypatch):
     assert bundles[0]["baseline_explain_raw"] == "explain-baseline-doc1"
     # shadow fails for q2 and should be recorded as None, not crash.
     assert bundles[0]["shadow_explain_raw"] is None
+
+
+def test_fetch_explains_structured_mode(monkeypatch):
+    captured = {"params": []}
+
+    def fake_select(_client: Any, _collection: str, params: dict[str, Any]):
+        captured["params"].append(params)
+        return {"debug": {"explain": {"doc1": {"value": 1, "description": "match"}}}}
+
+    monkeypatch.setattr("schema_lens.compare.explain_fetcher.select", fake_select)
+
+    bundles = fetch_explains(
+        baseline_client=object(),
+        baseline_collection="baseline",
+        shadow_client=object(),
+        shadow_collection="shadow",
+        replay_pairs=[{"query": {"id": 1, "params": {"q": "q1"}}}],
+        diffs=[
+            {
+                "query_id": 1,
+                "risk_severity": "HIGH",
+                "topk_overlap_count": 1,
+                "kendall_tau": 0.1,
+                "dropped_docs": ["doc1"],
+                "moved_docs": [],
+                "new_docs": [],
+            }
+        ],
+        k=10,
+        max_queries=3,
+        max_docs_per_query=1,
+        structured=True,
+    )
+    assert bundles[0]["baseline_explain_structured"]["description"] == "match"
+    assert any(p.get("debug.explain.structured") == "true" for p in captured["params"])

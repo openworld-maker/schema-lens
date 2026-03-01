@@ -25,3 +25,11 @@ def write_json(path: Path, data: Any) -> None:
 def write_text(path: Path, text: str) -> None:
     ensure_dir(path.parent)
     path.write_text(text, encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    ensure_dir(path.parent)
+    with path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=False))
+            f.write("\n")

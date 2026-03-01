@@ -103,7 +103,10 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
                 "query_id": query.get("id"),
                 "raw_line": query.get("raw_line"),
                 "params": query.get("params", {}),
+                "baseline_topk_ids": base_ids,
+                "shadow_topk_ids": shadow_ids,
                 "topk_overlap_count": overlap,
+                "overlap_ratio": overlap / k if k else 0.0,
                 "jaccard": jaccard,
                 "kendall_tau": tau,
                 "moved_docs": moved_docs,
@@ -121,8 +124,12 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
 
     total = len(diffs)
     high = len([d for d in diffs if d.get("risk_severity") == "HIGH"])
+    medium = len([d for d in diffs if d.get("risk_severity") == "MEDIUM"])
     avg_overlap = (
         sum(d.get("topk_overlap_count", 0) for d in diffs) / total if total else 0.0
+    )
+    avg_overlap_ratio = (
+        sum(d.get("overlap_ratio", 0.0) for d in diffs) / total if total else 0.0
     )
 
     ranked = sorted(
@@ -139,7 +146,9 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
         "summary": {
             "queries_total": total,
             "avg_overlap": avg_overlap,
+            "avg_overlap_ratio": avg_overlap_ratio,
             "high_risk_percent": (high / total * 100.0) if total else 0.0,
+            "med_risk_percent": (medium / total * 100.0) if total else 0.0,
         },
         "top_regressions": ranked[:20],
         "diffs": diffs,

@@ -96,6 +96,28 @@
     </div>
 
     <div class="card">
+      <h2>Schema Safety Findings</h2>
+      {% set safety = report.schema_safety_findings or {} %}
+      {% if safety.summary %}
+      <table>
+        <tr><th>Total</th><td>{{ safety.summary.total }}</td></tr>
+        <tr><th>High</th><td>{{ safety.summary.high }}</td></tr>
+        <tr><th>Medium</th><td>{{ safety.summary.medium }}</td></tr>
+        <tr><th>Low</th><td>{{ safety.summary.low }}</td></tr>
+        <tr><th>Block Run</th><td>{{ safety.block_run }}</td></tr>
+      </table>
+      {% else %}
+      <p class="muted">No schema safety findings were recorded for this run.</p>
+      {% endif %}
+      {% for finding in safety.findings or [] %}
+      <details>
+        <summary>[{{ finding.severity }}] {{ finding.code }} - {{ finding.message }}</summary>
+        <pre>{{ finding }}</pre>
+      </details>
+      {% endfor %}
+    </div>
+
+    <div class="card">
       <h2>Per Query Details</h2>
       {% for diff in report.per_query_diffs %}
       <details>

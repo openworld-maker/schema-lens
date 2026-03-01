@@ -1,0 +1,3 @@
+{"name":"supplier exact","params":{"q":"SupplierId:1001247","defType":"lucene"},"expected_ids":["1001247"]}
+{"name":"category head","params":{"q":"bearings","defType":"edismax","qf":"title^3 text"},"expected_ids":["B-001","B-019"]}
+

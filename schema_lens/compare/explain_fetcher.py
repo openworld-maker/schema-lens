@@ -34,16 +34,40 @@ def _fetch_explain(
     query_params: dict[str, Any],
     k: int,
     doc_id: str,
-) -> tuple[Any, dict[str, Any] | None]:
+) -> tuple[Any, Any, dict[str, Any] | None]:
+    return _fetch_explain_internal(
+        client=client,
+        collection=collection,
+        query_params=query_params,
+        k=k,
+        doc_id=doc_id,
+        structured=False,
+    )
+
+
+def _fetch_explain_internal(
+    *,
+    client: Any,
+    collection: str,
+    query_params: dict[str, Any],
+    k: int,
+    doc_id: str,
+    structured: bool,
+) -> tuple[Any, Any, dict[str, Any] | None]:
     params = dict(query_params)
-    params["debugQuery"] = "true"
+    if structured:
+        params["debug"] = "results"
+        params["debug.explain.structured"] = "true"
+    else:
+        params["debugQuery"] = "true"
     params["fl"] = "id,score"
     params["rows"] = str(k)
     params["wt"] = "json"
     resp = select(client, collection, params)
     debug = resp.get("debug", {})
     explain = debug.get("explain", {}).get(doc_id)
-    return explain, debug
+    explain_structured = explain if isinstance(explain, dict) else None
+    return explain, explain_structured, debug
 
 
 def fetch_explains(
@@ -57,6 +81,7 @@ def fetch_explains(
     k: int,
     max_queries: int,
     max_docs_per_query: int,
+    structured: bool = False,
 ) -> list[dict[str, Any]]:
     by_qid = {pair.get("query", {}).get("id"): pair for pair in replay_pairs}
 
@@ -86,8 +111,13 @@ def fetch_explains(
 
         for doc_id in doc_ids:
             try:
-                base_explain, base_debug = _fetch_explain(
-                    baseline_client, baseline_collection, params, k, doc_id
+                base_explain, base_structured, base_debug = _fetch_explain_internal(
+                    client=baseline_client,
+                    collection=baseline_collection,
+                    query_params=params,
+                    k=k,
+                    doc_id=doc_id,
+                    structured=structured,
                 )
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning(
@@ -97,11 +127,17 @@ def fetch_explains(
                     exc,
                 )
                 base_explain = None
+                base_structured = None
                 base_debug = None
 
             try:
-                shadow_explain, shadow_debug = _fetch_explain(
-                    shadow_client, shadow_collection, params, k, doc_id
+                shadow_explain, shadow_structured, shadow_debug = _fetch_explain_internal(
+                    client=shadow_client,
+                    collection=shadow_collection,
+                    query_params=params,
+                    k=k,
+                    doc_id=doc_id,
+                    structured=structured,
                 )
             except Exception as exc:  # noqa: BLE001
                 LOGGER.warning(
@@ -111,6 +147,7 @@ def fetch_explains(
                     exc,
                 )
                 shadow_explain = None
+                shadow_structured = None
                 shadow_debug = None
 
             bundles.append(
@@ -119,6 +156,8 @@ def fetch_explains(
                     "doc_id": doc_id,
                     "baseline_explain_raw": base_explain,
                     "shadow_explain_raw": shadow_explain,
+                    "baseline_explain_structured": base_structured,
+                    "shadow_explain_structured": shadow_structured,
                     "baseline_debug": base_debug,
                     "shadow_debug": shadow_debug,
                 }
