@@ -1,0 +1,43 @@
+schema_lens_version: 1
+
+baseline:
+  solr_url: "http://localhost:8983/solr"
+  collection: "products"
+  request_defaults:
+    rows: 5
+    fl: "id,score"
+
+shadow:
+  mode: "solrcloud"
+  solr_url: "http://localhost:8983/solr"
+  collection_name_template: "{collection}__shadow__{ts}"
+  num_shards: 1
+  replication_factor: 1
+  cleanup: true
+  allow_shared_configset_fallback: true
+
+data:
+  docs_source:
+    type: "file"
+    path: "examples/docs.json"
+    format: "json"
+    id_field: "id"
+  sample_n: 8
+
+queries:
+  source:
+    type: "file"
+    path: "examples/queries.jsonl"
+    format: "jsonl"
+  max_queries: 4
+
+changes:
+  - op: "queryparams.set"
+    set:
+      defType: "edismax"
+
+evaluation:
+  k: 5
+  metrics: [overlap, jaccard, kendall_tau]
+  explain:
+    enabled: false

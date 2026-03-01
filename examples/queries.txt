@@ -1,0 +1,5 @@
+laptop
+charger
+q=wireless mouse
+q=headphones&fq=category:audio
+{"q":"phone","fq":"category:electronics"}

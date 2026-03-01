@@ -1,0 +1,12 @@
+[
+  {"id":"1","title":"gaming laptop","text":"high performance laptop for gaming","category":"electronics"},
+  {"id":"2","title":"office laptop","text":"lightweight business notebook","category":"electronics"},
+  {"id":"3","title":"wireless mouse","text":"ergonomic bluetooth mouse","category":"electronics"},
+  {"id":"4","title":"usb c charger","text":"fast charging usb-c adapter","category":"electronics"},
+  {"id":"5","title":"noise cancelling headphones","text":"over ear audio headphones","category":"audio"},
+  {"id":"6","title":"mechanical keyboard","text":"tactile keyboard for typing","category":"electronics"},
+  {"id":"7","title":"running shoes","text":"light running shoes for distance","category":"sports"},
+  {"id":"8","title":"trail backpack","text":"outdoor backpack with hydration sleeve","category":"sports"},
+  {"id":"9","title":"phone case","text":"durable protective smartphone case","category":"electronics"},
+  {"id":"10","title":"smartphone charger","text":"compact wall charger for phones","category":"electronics"}
+]

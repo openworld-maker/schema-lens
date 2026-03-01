@@ -1,0 +1,46 @@
+name: Smoke Matrix
+
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Start SolrCloud
+        run: make dev-up
+
+      - name: Wait for Solr and setup baseline
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://localhost:8983/solr/admin/info/system?wt=json" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          make demo-setup
+
+      - name: Run smoke matrix
+        run: make smoke-matrix
+
+      - name: Upload matrix reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-lens-smoke-matrix-reports
+          path: out/matrix
+          if-no-files-found: warn
+
+      - name: Teardown SolrCloud
+        if: always()
+        run: make dev-down

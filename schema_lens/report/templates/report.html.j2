@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Schema Lens Report</title>
+  <style>
+    :root {
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --text: #10212b;
+      --muted: #50616d;
+      --danger: #c02f1d;
+      --warn: #ab6b00;
+      --ok: #176f45;
+      --border: #d9e1e7;
+    }
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top right, #d9edf7 0%, var(--bg) 40%);
+      color: var(--text);
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    }
+    .container { max-width: 1080px; margin: 0 auto; padding: 24px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.05);
+    }
+    h1, h2 { margin-top: 0; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-bottom: 1px solid var(--border); text-align: left; padding: 8px; font-size: 14px; }
+    .risk-HIGH { color: var(--danger); font-weight: 700; }
+    .risk-MEDIUM { color: var(--warn); font-weight: 700; }
+    .risk-LOW { color: var(--ok); font-weight: 700; }
+    .muted { color: var(--muted); }
+    pre {
+      background: #0f1720;
+      color: #d9ecff;
+      border-radius: 10px;
+      padding: 12px;
+      overflow-x: auto;
+      font-size: 12px;
+    }
+    details { margin-bottom: 10px; }
+    summary { cursor: pointer; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Schema Lens Report</h1>
+      <p class="muted">Run ID: {{ report.run_manifest.run_id }}</p>
+      <p class="muted">Started: {{ report.run_manifest.started_at }} | Ended: {{ report.run_manifest.ended_at }}</p>
+    </div>
+
+    <div class="card">
+      <h2>Summary</h2>
+      <table>
+        <tr><th>Total Queries</th><td>{{ report.summary.queries_total }}</td></tr>
+        <tr><th>Failures</th><td>{{ report.summary.failures }}</td></tr>
+        <tr><th>Average Overlap</th><td>{{ "%.2f"|format(report.summary.avg_overlap) }}</td></tr>
+        <tr><th>High Risk %</th><td>{{ "%.2f"|format(report.summary.high_risk_percent) }}</td></tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Top Regressions</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Query ID</th>
+            <th>Raw Query</th>
+            <th>Risk</th>
+            <th>Overlap</th>
+            <th>Jaccard</th>
+            <th>Kendall Tau</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in report.top_regressions %}
+          <tr>
+            <td>{{ row.query_id }}</td>
+            <td>{{ row.raw_q }}</td>
+            <td class="risk-{{ row.risk }}">{{ row.risk }}</td>
+            <td>{{ row.overlap }}</td>
+            <td>{{ "%.3f"|format(row.jaccard) if row.jaccard is not none else "n/a" }}</td>
+            <td>{{ "%.3f"|format(row.kendall_tau) if row.kendall_tau is not none else "n/a" }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Per Query Details</h2>
+      {% for diff in report.per_query_diffs %}
+      <details>
+        <summary>Query {{ diff.query_id }} | {{ diff.raw_line }} | Risk {{ diff.risk_severity }}</summary>
+        <pre>{{ diff }}</pre>
+      </details>
+      {% endfor %}
+    </div>
+
+    <div class="card">
+      <h2>Embedded JSON</h2>
+      <pre>{{ report_json }}</pre>
+    </div>
+  </div>
+</body>
+</html>
