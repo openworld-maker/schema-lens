@@ -1,0 +1,17 @@
+install_cmd: "python3 -m pip install -e '.[dev]'"
+lint_cmd: "ruff check ."
+test_cmd: "pytest -q -m 'not integration'"
+requires_docker: false
+docker_compose_file: "examples/solrcloud-docker/docker-compose.yml"
+max_total_tokens: 120000
+max_runtime_minutes: 60
+max_iterations: 3
+comment_poll_interval: 30
+denylist_paths:
+  - ".github/workflows/ci.yml"
+  - ".github/workflows/smoke-matrix.yml"
+planner_prompt_version: "v1.0.0"
+planner_prompt_sha: "e5cb538481a7104713912752a7e417412662f582"
+executor_prompt_version: "v1.0.0"
+executor_prompt_sha: "e5cb538481a7104713912752a7e417412662f582"
+base_context_version: "v1"

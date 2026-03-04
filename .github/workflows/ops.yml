@@ -1,0 +1,73 @@
+name: ops
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Issue number override"
+        required: false
+        type: string
+      objective:
+        description: "Direct objective override"
+        required: false
+        type: string
+      resume_run_id:
+        description: "Resume run id"
+        required: false
+        type: string
+  schedule:
+    - cron: "*/30 * * * *"
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  autonomous-dev:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' && (
+        startsWith(github.event.comment.body, '/ops run') ||
+        startsWith(github.event.comment.body, '/ops resume')
+      ))
+    uses: openworld-maker/ops-infra/.github/workflows/autonomous-dev.yml@v1
+    with:
+      issue_number: ${{ github.event.inputs.issue_number || github.event.issue.number || '' }}
+      objective: ${{ github.event.inputs.objective || '' }}
+      resume_run_id: ${{ github.event.inputs.resume_run_id || '' }}
+      planner_prompt_version: v1.0.0
+      executor_prompt_version: v1.0.0
+    secrets: inherit
+
+  review-autopilot:
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'pull_request' ||
+      github.event_name == 'pull_request_review'
+    uses: openworld-maker/ops-infra/.github/workflows/review-autopilot.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number || '0' }}
+      executor_prompt_version: v1.0.0
+    secrets: inherit
+
+  merge-gate:
+    if: >-
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved'
+    uses: openworld-maker/ops-infra/.github/workflows/merge-gate.yml@v1
+    with:
+      pr_number: ${{ github.event.pull_request.number }}
+    secrets: inherit
+
+  watchdog:
+    if: github.event_name == 'schedule'
+    uses: openworld-maker/ops-infra/.github/workflows/watchdog.yml@v1
+    secrets: inherit
