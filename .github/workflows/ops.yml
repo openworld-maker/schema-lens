@@ -68,7 +68,3 @@ jobs:
       pr_number: ${{ github.event.pull_request.number }}
     secrets: inherit
 
-  watchdog:
-    if: github.event_name == 'schedule'
-    uses: openworld-maker/ops-infra/.github/workflows/watchdog.yml@b45c1eaaec9bc945818b6e4562158bfda94dc870
-    secrets: inherit
