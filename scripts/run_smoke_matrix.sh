@@ -10,6 +10,7 @@ SCENARIOS=(
   "examples/changesets/json-input-queryjsonl.yaml json_inputs"
   "examples/changesets/fieldtype-change.yaml schema_ops"
   "examples/changesets/prod_realism_example.yaml prod_realism"
+  "examples/changesets/procurement-synonym-rewrite.yaml procurement_rewrite"
 )
 
 for item in "${SCENARIOS[@]}"; do
@@ -18,6 +19,9 @@ for item in "${SCENARIOS[@]}"; do
   out_dir="$RUN_ROOT/$name"
 
   echo "== Running scenario: $name ($changeset)"
+  if [[ "$name" == "procurement_rewrite" ]]; then
+    make demo-setup-procurement
+  fi
   .venv/bin/schema-lens validate "$changeset" --no-check-solr
   .venv/bin/schema-lens run "$changeset" --out "$out_dir"
 
@@ -83,6 +87,20 @@ required = ["numfound_delta", "sort_instability_ratio", "facet_diffs"]
 for key in required:
     if key not in sample:
         raise SystemExit(f"missing key in compare diff: {key}")
+PY
+
+python3 - <<PY
+import json
+path = "$RUN_ROOT/procurement_rewrite/compare.json"
+data = json.load(open(path))
+rewrite = data.get("rewrite_diff", {})
+if not rewrite.get("enabled"):
+    raise SystemExit("rewrite_diff not enabled in procurement_rewrite compare output")
+flags = []
+for row in rewrite.get("per_query", []):
+    flags.extend(row.get("risk_flags", []))
+if "SYNONYM_EXPANSION_CHANGED" not in flags:
+    raise SystemExit("expected SYNONYM_EXPANSION_CHANGED in rewrite diff output")
 PY
 
 echo "Smoke matrix completed: $RUN_ROOT"

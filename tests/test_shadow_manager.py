@@ -103,3 +103,61 @@ def test_cleanup_shadow_deletes_collection_and_optional_configset(monkeypatch):
     out = cleanup_shadow(object(), "shadow-x", shadow_configset="cfg-x")
     assert out["collection"]["ok"] is True
     assert out["configset"]["cfg"] == "deleted"
+
+
+def test_create_shadow_with_configset_updates_uploads_patched_configset(monkeypatch, tmp_path):
+    monkeypatch.setattr("schema_lens.shadow.manager.render_shadow_name", lambda *_: "shadow4")
+    monkeypatch.setattr("schema_lens.shadow.manager.collection_config_name", lambda *_: "cfg0")
+    monkeypatch.setattr("schema_lens.shadow.manager.has_configset_updates", lambda *_: True)
+
+    cfg_root = tmp_path / "cfg"
+    (cfg_root / "conf").mkdir(parents=True)
+    (cfg_root / "conf/synonyms.txt").write_text("ss=>steel\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "schema_lens.shadow.manager._materialize_baseline_configset",
+        lambda **_kwargs: cfg_root,
+    )
+    monkeypatch.setattr(
+        "schema_lens.shadow.manager.apply_configset_updates",
+        lambda **_kwargs: {"applied": [{"op": "schema.synonym.update"}]},
+    )
+
+    hashes = iter(["sha256:base", "sha256:shadow"])
+    monkeypatch.setattr("schema_lens.shadow.manager.hash_directory", lambda *_: next(hashes))
+    captured = {}
+
+    def fake_upload(*_args, **kwargs):
+        captured["name"] = kwargs["name"]
+        return {"ok": True}
+
+    monkeypatch.setattr("schema_lens.shadow.manager.upload_configset_from_dir", fake_upload)
+    monkeypatch.setattr(
+        "schema_lens.shadow.manager.create_configset",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "schema_lens.shadow.manager.delete_configset",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "schema_lens.shadow.manager.create_collection",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr("schema_lens.shadow.manager.apply_schema_operations", lambda *_a, **_k: [])
+
+    manifest = create_shadow(
+        client=object(),
+        baseline_collection="products",
+        baseline_solr_url="http://baseline",
+        shadow_solr_url="http://shadow",
+        shadow_cfg={},
+        baseline_schema={"schema": {}},
+        changes=[{"op": "schema.synonym.update"}],
+    )
+
+    assert captured["name"] == "shadow4__cfg"
+    assert manifest.baseline_configset_hash == "sha256:base"
+    assert manifest.shadow_configset_hash == "sha256:shadow"
+    assert manifest.shadow_configset == "shadow4__cfg__trusted"
+    assert manifest.configset_patch["applied"][0]["op"] == "schema.synonym.update"

@@ -16,7 +16,10 @@ class ShadowManifest:
     baseline_solr_url: str = ""
     shadow_configset: str | None = None
     baseline_configset: str | None = None
+    baseline_configset_hash: str | None = None
+    shadow_configset_hash: str | None = None
     configset_isolated: bool = True
+    configset_patch: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     docs_indexed: int = 0
 

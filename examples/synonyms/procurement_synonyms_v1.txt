@@ -1,0 +1,3 @@
+rfq,request for quote
+po,purchase order
+nbr,nitrile rubber

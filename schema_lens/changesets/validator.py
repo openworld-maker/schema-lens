@@ -9,6 +9,8 @@ from typing import Any
 from schema_lens.changesets.model import Changeset
 from schema_lens.changesets.operations import SUPPORTED_OPS
 
+CONFIGSET_UPDATE_MODES = {"replace", "patch_append", "patch_merge"}
+
 
 @dataclass
 class ValidationReport:
@@ -128,6 +130,30 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
             if field_val is not None and not isinstance(field_val, bool):
                 report.errors.append(f"replay.capture.{field_name} must be boolean")
 
+    rewrite_diff = _get_in(raw, "evaluation.rewrite_diff")
+    if rewrite_diff is not None and not isinstance(rewrite_diff, dict):
+        report.errors.append("evaluation.rewrite_diff must be an object")
+    if isinstance(rewrite_diff, dict):
+        enabled = rewrite_diff.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("evaluation.rewrite_diff.enabled must be boolean")
+        for key in ("max_queries", "clause_spike_threshold"):
+            value = rewrite_diff.get(key)
+            if value is not None:
+                try:
+                    if int(value) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    report.errors.append(f"evaluation.rewrite_diff.{key} must be an integer > 0")
+        debug_mode = rewrite_diff.get("debug_mode")
+        if debug_mode is not None and debug_mode not in {"debugQuery", "results"}:
+            report.errors.append(
+                "evaluation.rewrite_diff.debug_mode must be 'debugQuery' or 'results'"
+            )
+        always_for_high_risk = rewrite_diff.get("always_for_high_risk")
+        if always_for_high_risk is not None and not isinstance(always_for_high_risk, bool):
+            report.errors.append("evaluation.rewrite_diff.always_for_high_risk must be boolean")
+
     changes = raw.get("changes", [])
     if not isinstance(changes, list):
         report.errors.append("changes must be a list")
@@ -135,6 +161,8 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
 
     if not changes:
         report.warnings.append("No changes specified; run will still execute query replay")
+
+    configset_source_files: list[str] = []
 
     for idx, op in enumerate(changes):
         loc = f"changes[{idx}]"
@@ -168,6 +196,54 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         if op_name == "queryparams.set" and not isinstance(op.get("set"), dict):
             report.errors.append(f"{loc}.set must be an object")
 
+        if op_name in {"schema.synonym.update", "schema.stopwords.update"}:
+            mode = op.get("mode")
+            if mode not in CONFIGSET_UPDATE_MODES:
+                report.errors.append(
+                    f"{loc}.mode must be one of {sorted(CONFIGSET_UPDATE_MODES)}"
+                )
+            target = op.get("target")
+            if not isinstance(target, dict):
+                report.errors.append(f"{loc}.target must be an object")
+                target = {}
+            files = target.get("files")
+            if not isinstance(files, list) or not files:
+                report.errors.append(f"{loc}.target.files must be a non-empty list")
+                files = []
+
+            op_source_file = op.get("source_file")
+            if op_source_file is not None and not isinstance(op_source_file, str):
+                report.errors.append(f"{loc}.source_file must be a string path")
+                op_source_file = None
+
+            if isinstance(op_source_file, str):
+                configset_source_files.append(op_source_file)
+
+            for file_idx, entry in enumerate(files):
+                file_loc = f"{loc}.target.files[{file_idx}]"
+                if not isinstance(entry, dict):
+                    report.errors.append(f"{file_loc} must be an object")
+                    continue
+                if not isinstance(entry.get("path"), str) or not entry.get("path"):
+                    report.errors.append(f"{file_loc}.path is required")
+
+                entry_mode = entry.get("mode")
+                if entry_mode is not None and entry_mode not in CONFIGSET_UPDATE_MODES:
+                    report.errors.append(
+                        f"{file_loc}.mode must be one of {sorted(CONFIGSET_UPDATE_MODES)}"
+                    )
+
+                entry_source = entry.get("source_file")
+                if entry_source is not None and not isinstance(entry_source, str):
+                    report.errors.append(f"{file_loc}.source_file must be a string path")
+                elif isinstance(entry_source, str):
+                    configset_source_files.append(entry_source)
+
+                if entry.get("source_file") is None and op_source_file is None:
+                    report.errors.append(
+                        f"{file_loc}.source_file is required when {loc}.source_file is not set"
+                    )
+
     if check_paths:
         docs_path = _get_in(raw, "data.docs_source.path") if docs_source_type == "file" else None
         queries_path = _get_in(raw, "queries.source.path")
@@ -179,5 +255,21 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
                 fp = _resolve_input_path(changeset.path, p)
                 if not fp.exists():
                     report.errors.append(f"{label} does not exist: {fp}")
+        seen_cfg_paths: set[Path] = set()
+        for raw_source in configset_source_files:
+            fp = _resolve_input_path(changeset.path, raw_source)
+            if fp in seen_cfg_paths:
+                continue
+            seen_cfg_paths.add(fp)
+            if not fp.exists():
+                report.errors.append(f"configset source_file does not exist: {fp}")
+
+        baseline_cfg_dir = _get_in(raw, "shadow.baseline_configset_dir")
+        if isinstance(baseline_cfg_dir, str):
+            cfg_dir = _resolve_input_path(changeset.path, baseline_cfg_dir)
+            if not cfg_dir.exists() or not cfg_dir.is_dir():
+                report.errors.append(
+                    f"shadow.baseline_configset_dir does not exist or is not a directory: {cfg_dir}"
+                )
 
     return report

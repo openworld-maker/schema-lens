@@ -36,6 +36,9 @@ class SolrHttpClient:
         path: str,
         params: dict[str, Any] | None = None,
         json_body: Any | None = None,
+        content_body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+        expect_json: bool = True,
     ) -> Any:
         url = urljoin(self.base_url, path.lstrip("/"))
         last_error: Exception | None = None
@@ -52,6 +55,8 @@ class SolrHttpClient:
                     url,
                     params=params,
                     json=json_body,
+                    content=content_body,
+                    headers=headers,
                 )
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                 if self.verbose:
@@ -71,7 +76,9 @@ class SolrHttpClient:
                         continue
 
                 response.raise_for_status()
-                return response.json()
+                if expect_json:
+                    return response.json()
+                return response.content
             except (httpx.ConnectError, httpx.ReadTimeout, httpx.RemoteProtocolError) as exc:
                 last_error = exc
                 if attempt <= len(retries):
@@ -88,6 +95,8 @@ class SolrHttpClient:
                     message
                 ) from exc
             except ValueError as exc:
+                if not expect_json:
+                    raise SolrRequestError(f"Invalid non-JSON response handling for {url}") from exc
                 raise SolrRequestError(f"Invalid JSON response from {url}") from exc
 
         raise SolrRequestError(f"Request failed after retries for {url}: {last_error}")
@@ -102,3 +111,22 @@ class SolrHttpClient:
         json_body: Any | None = None,
     ) -> Any:
         return self._request("POST", path, params=params, json_body=json_body)
+
+    def get_bytes(self, path: str, params: dict[str, Any] | None = None) -> bytes:
+        return self._request("GET", path, params=params, expect_json=False)
+
+    def post_bytes(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        content_body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> bytes:
+        return self._request(
+            "POST",
+            path,
+            params=params,
+            content_body=content_body,
+            headers=headers,
+            expect_json=False,
+        )

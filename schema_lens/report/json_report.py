@@ -65,6 +65,7 @@ def build_report_json(
         "run_manifest": manifest,
         "summary": summary,
         "schema_safety_findings": compare_data.get("schema_safety_findings", {}),
+        "query_rewrite_impact": compare_data.get("rewrite_diff", {}),
         "top_regressions": top_regressions,
         "per_query_diffs": compare_data.get("diffs", []),
         "explain_bundles": compare_data.get("explain_bundles", []),

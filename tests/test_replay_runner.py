@@ -39,6 +39,7 @@ def test_run_replay_success_and_param_merging(monkeypatch, tmp_path: Path):
     assert replay["stats"]["queries_total"] == 2
     assert replay["stats"]["failures"] == 0
     assert len(replay["pairs"]) == 2
+    assert replay["pairs"][0]["effective_params"]["defType"] == "edismax"
 
     first_call = calls[0][1]
     assert first_call["rows"] == "10"

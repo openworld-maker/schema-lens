@@ -7,6 +7,7 @@ def test_build_report_json_handles_empty_dropped_docs():
         replay_data={"stats": {"failures": 1}},
         compare_data={
             "summary": {"queries_total": 2, "avg_overlap": 0.5, "high_risk_percent": 50.0},
+            "rewrite_diff": {"enabled": True, "queries_analyzed": 1, "per_query": []},
             "top_regressions": [
                 {
                     "query_id": 1,
@@ -25,6 +26,7 @@ def test_build_report_json_handles_empty_dropped_docs():
 
     assert report["summary"]["failures"] == 1
     assert report["top_regressions"][0]["dropped_top_doc"] is None
+    assert report["query_rewrite_impact"]["enabled"] is True
 
 
 def test_build_report_json_summary_defaults():

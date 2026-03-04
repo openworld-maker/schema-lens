@@ -1,4 +1,4 @@
-# Changeset Spec v0.1.2
+# Changeset Spec v0.1.3
 
 ```yaml
 schema_lens_version: 1
@@ -23,6 +23,11 @@ shadow:
   replication_factor: 1
   cleanup: true
   allow_shared_configset_fallback: false
+  # when configset patch ops upload new configsets, promote to trusted clone for
+  # SolrCloud environments that enforce trusted configsets:
+  promote_uploaded_configset_trusted: true
+  # optional local directory baseline when configset patch ops are used:
+  # baseline_configset_dir: "examples/configsets/base_cfg"
 
 data:
   docs_source:
@@ -78,13 +83,30 @@ changes:
     field: "title"
     set:
       type: "text_en"
+
   - op: "schema.fieldType.replace"
     name: "text_general"
     with: "text_en"
+
   - op: "schema.analyzer.remove_filter"
     fieldType: "text_general"
     analyzer: "index"
     filter_class: "solr.LowerCaseFilterFactory"
+
+  - op: "schema.synonym.update"
+    mode: "replace" # replace | patch_append | patch_merge
+    source_file: "examples/synonyms/procurement_synonyms_v2.txt"
+    target:
+      files:
+        - path: "conf/synonyms.txt"
+
+  - op: "schema.stopwords.update"
+    mode: "patch_merge" # replace | patch_append | patch_merge
+    source_file: "examples/stopwords/procurement_stopwords_v2.txt"
+    target:
+      files:
+        - path: "conf/stopwords.txt"
+
   - op: "queryparams.set"
     set:
       qf: "title^5 text"
@@ -101,6 +123,12 @@ evaluation:
     structured: false
     max_queries: 25
     max_docs_per_query: 3
+  rewrite_diff:
+    enabled: true
+    max_queries: 25
+    debug_mode: "debugQuery" # "debugQuery" | "results"
+    clause_spike_threshold: 5
+    always_for_high_risk: true
 ```
 
 ## Required fields
@@ -116,16 +144,34 @@ evaluation:
 - `schema.field.update`
 - `schema.fieldType.replace`
 - `schema.analyzer.remove_filter`
+- `schema.synonym.update`
+- `schema.stopwords.update`
 - `queryparams.set`
+
+## Configset update ops
+
+- `schema.synonym.update` and `schema.stopwords.update` apply to shadow configset files.
+- `target.files[*].path` points to configset-relative paths (for example `conf/synonyms.txt`).
+- Paths can be `conf/<file>` or root style `<file>` depending on configset layout.
+- `source_file` can be set at op-level or per target file entry.
+- `mode` options:
+  - `replace`: overwrite target with source content.
+  - `patch_append`: append source lines after existing lines.
+  - `patch_merge`: deterministic unique line merge of existing + source.
+- When these ops are present, schema-lens builds an isolated patched configset and creates the
+  shadow collection with `collection.configName=<patched_configset>`.
+- By default, schema-lens then promotes uploaded configsets to a trusted clone for environments
+  where untrusted uploaded configsets are restricted (`shadow.promote_uploaded_configset_trusted`).
 
 ## Notes
 
-- `queryparams.set` affects replay parameters only.
+- `queryparams.set` affects replay/debug request parameters only.
 - `queries.source.type=log` enables log extraction + canonical JSONL replay generation.
 - `data.docs_source.type=solr` samples docs from Solr and writes reproducible JSONL output.
-- Preflight always emits `schema_risk.json`; set `preflight.fail_on_risk=true` to block execution on HIGH risks.
+- Preflight always emits `schema_risk.json`; set `preflight.fail_on_risk=true` to block execution.
 - `replay.capture.facets.enabled=true` captures classic Solr facet counts during replay.
-- `replay.capture.track_numfound` and `replay.capture.track_sort` enable extra diagnostics in compare/report output.
-- `schema.analyzer.remove_filter.filter_class` can be a Java class (for example `solr.LowerCaseFilterFactory`) or the short filter name (`lowercase`).
-- `shadow.allow_shared_configset_fallback=true` allows a non-isolated fallback when Solr blocks configset clone operations (401 on trusted base configsets). This is explicit and can affect baseline behavior.
+- `evaluation.rewrite_diff.enabled=true` captures parser/rewrite debug payloads and computes
+  query rewrite impact heuristics.
+- `shadow.allow_shared_configset_fallback=true` allows non-isolated fallback only for plain
+  configset clone path (no file patching).
 - Empty `changes` is allowed with a warning.

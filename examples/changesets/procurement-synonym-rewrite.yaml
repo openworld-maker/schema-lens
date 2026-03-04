@@ -1,0 +1,65 @@
+schema_lens_version: 1
+
+baseline:
+  solr_url: "http://localhost:8983/solr"
+  collection: "procurement"
+  request_defaults:
+    rows: 10
+    fl: "id,score"
+    defType: "edismax"
+    extra_params:
+      qf: "title^5 text^2"
+      pf: "title^15"
+      mm: "2<75%"
+
+shadow:
+  mode: "solrcloud"
+  solr_url: "http://localhost:8983/solr"
+  collection_name_template: "{collection}__shadow__{ts}"
+  num_shards: 1
+  replication_factor: 1
+  cleanup: true
+  baseline_configset_dir: "examples/configsets/procurement_v1"
+
+data:
+  docs_source:
+    type: "file"
+    path: "examples/docs/procurement_docs.jsonl"
+    format: "jsonl"
+    id_field: "id"
+
+queries:
+  source:
+    type: "file"
+    path: "examples/queries/procurement_realistic_queries.jsonl"
+    format: "jsonl"
+  max_queries: 50
+
+changes:
+  - op: "schema.synonym.update"
+    mode: "replace"
+    source_file: "examples/synonyms/procurement_synonyms_v2.txt"
+    target:
+      files:
+        - path: "conf/synonyms.txt"
+  - op: "schema.stopwords.update"
+    mode: "replace"
+    source_file: "examples/stopwords/procurement_stopwords_v2.txt"
+    target:
+      files:
+        - path: "conf/stopwords.txt"
+
+evaluation:
+  k: 10
+  metrics:
+    - overlap
+    - jaccard
+    - kendall_tau
+  rewrite_diff:
+    enabled: true
+    max_queries: 20
+    debug_mode: "results"
+    clause_spike_threshold: 2
+    always_for_high_risk: true
+  explain:
+    enabled: false

@@ -127,6 +127,70 @@
     </div>
 
     <div class="card">
+      <h2>Query Rewrite Impact</h2>
+      {% set rewrite = report.query_rewrite_impact or {} %}
+      {% if rewrite.enabled %}
+      <table>
+        <tr><th>Debug Mode</th><td>{{ rewrite.debug_mode }}</td></tr>
+        <tr><th>Queries Analyzed</th><td>{{ rewrite.queries_analyzed }}</td></tr>
+        <tr><th>Clause Spike Threshold</th><td>{{ rewrite.clause_spike_threshold }}</td></tr>
+      </table>
+      <h3>Top Clause Deltas</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Query ID</th>
+            <th>Raw Query</th>
+            <th>Clause Δ</th>
+            <th>Flags</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rewrite.top_clause_deltas or [] %}
+          <tr>
+            <td>{{ row.query_id }}</td>
+            <td>{{ row.raw_line }}</td>
+            <td>{{ row.clause_delta }}</td>
+            <td>{{ row.risk_flags }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <h3>Top Synonym-Changed Queries</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Query ID</th>
+            <th>Raw Query</th>
+            <th>Hints</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rewrite.top_synonym_changed or [] %}
+          <tr>
+            <td>{{ row.query_id }}</td>
+            <td>{{ row.raw_line }}</td>
+            <td>{{ row.synonym_hints }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% for row in rewrite.per_query or [] %}
+      <details>
+        <summary>Rewrite Query {{ row.query_id }} | Clause Δ {{ row.clause_delta }} | Flags {{ row.risk_flags }}</summary>
+        <p class="muted">
+          Parsed baseline: <code>{{ row.baseline.parsedquery_toString }}</code><br/>
+          Parsed shadow: <code>{{ row.shadow.parsedquery_toString }}</code>
+        </p>
+        <pre>{{ row }}</pre>
+      </details>
+      {% endfor %}
+      {% else %}
+      <p class="muted">Rewrite diff was not enabled for this run.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
       <h2>Per Query Details</h2>
       {% for diff in report.per_query_diffs %}
       <details>

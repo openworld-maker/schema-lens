@@ -18,6 +18,7 @@ from schema_lens.ci.summarize import build_ci_summary_markdown
 from schema_lens.compare.diff import compare_replay
 from schema_lens.compare.explain_fetcher import fetch_explains
 from schema_lens.compare.gate import evaluate_gate, load_gate_policy
+from schema_lens.compare.rewrite_diff import load_synonym_rules_from_changes, run_rewrite_diff
 from schema_lens.config import RunManifest
 from schema_lens.data.docs_loader import load_docs
 from schema_lens.data.solr_sampler import sample_docs_from_solr
@@ -218,6 +219,7 @@ def shadow_create(
             shadow_cfg=shadow_cfg,
             baseline_schema=baseline_schema,
             changes=changeset.changes,
+            changeset_path=changeset_path,
         )
         write_json(out, manifest.to_dict())
     finally:
@@ -712,6 +714,7 @@ def run(
                 shadow_cfg=shadow_cfg,
                 baseline_schema=baseline_schema,
                 changes=changeset.changes,
+                changeset_path=changeset_path,
             )
             shadow_name = shadow_manifest.shadow_collection
             write_json(Path(manifest.outputs["shadow_json"]), shadow_manifest.to_dict())
@@ -723,7 +726,10 @@ def run(
                 "applied_changes": shadow_manifest.applied_changes,
                 "shadow_configset": shadow_manifest.shadow_configset,
                 "baseline_configset": shadow_manifest.baseline_configset,
+                "baseline_configset_hash": shadow_manifest.baseline_configset_hash,
+                "shadow_configset_hash": shadow_manifest.shadow_configset_hash,
                 "configset_isolated": shadow_manifest.configset_isolated,
+                "configset_patch": shadow_manifest.configset_patch,
                 "warnings": shadow_manifest.warnings,
             }
 
@@ -893,6 +899,64 @@ def run(
         with stage("compare"):
             compare_data = compare_replay(replay_data, effective_k)
             compare_data["schema_safety_findings"] = schema_risk_data
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+
+        with stage("rewrite_diff"):
+            rewrite_cfg = eval_cfg.get("rewrite_diff", {})
+            manifest.settings["rewrite_diff"] = rewrite_cfg if isinstance(rewrite_cfg, dict) else {}
+            if isinstance(rewrite_cfg, dict) and rewrite_cfg.get("enabled", False):
+                if not shadow_name:
+                    raise StageError("Shadow name unavailable during rewrite_diff stage")
+                synonym_rules = load_synonym_rules_from_changes(
+                    changeset.changes,
+                    changeset_path=str(changeset_path.resolve()),
+                )
+                has_synonym_changes = any(
+                    op.get("op") == "schema.synonym.update"
+                    for op in changeset.changes
+                    if isinstance(op, dict)
+                )
+                rewrite_data = run_rewrite_diff(
+                    baseline_client=baseline_client,
+                    baseline_collection=baseline_collection,
+                    shadow_client=shadow_client,
+                    shadow_collection=shadow_name,
+                    replay_pairs=replay_data.get("pairs", []),
+                    diffs=compare_data.get("diffs", []),
+                    k=effective_k,
+                    rewrite_cfg=rewrite_cfg,
+                    synonym_rules=synonym_rules,
+                    has_synonym_changes=has_synonym_changes,
+                )
+                compare_data["rewrite_diff"] = rewrite_data
+                rewrite_flags_by_qid = {
+                    item.get("query_id"): item.get("risk_flags", [])
+                    for item in rewrite_data.get("per_query", [])
+                    if item.get("query_id") is not None
+                }
+                for diff_row in compare_data.get("diffs", []):
+                    qid = diff_row.get("query_id")
+                    flags = rewrite_flags_by_qid.get(qid, [])
+                    if not isinstance(diff_row.get("risk_flags"), list):
+                        diff_row["risk_flags"] = []
+                    for flag in flags:
+                        if flag not in diff_row["risk_flags"]:
+                            diff_row["risk_flags"].append(flag)
+                for diff_row in compare_data.get("top_regressions", []):
+                    qid = diff_row.get("query_id")
+                    flags = rewrite_flags_by_qid.get(qid, [])
+                    if not isinstance(diff_row.get("risk_flags"), list):
+                        diff_row["risk_flags"] = []
+                    for flag in flags:
+                        if flag not in diff_row["risk_flags"]:
+                            diff_row["risk_flags"].append(flag)
+            else:
+                compare_data["rewrite_diff"] = {
+                    "enabled": False,
+                    "per_query": [],
+                    "top_clause_deltas": [],
+                    "top_synonym_changed": [],
+                }
             write_json(Path(manifest.outputs["compare_json"]), compare_data)
 
         with stage("explain"):

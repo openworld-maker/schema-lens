@@ -1,0 +1,6 @@
+rfq,request for quote
+po,purchase order
+nbr,nitrile rubber
+ss,stainless steel
+ms,mild steel
+316,316 stainless

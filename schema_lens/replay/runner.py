@@ -129,6 +129,7 @@ def run_replay(
         pairs.append(
             {
                 "query": case.to_dict(),
+                "effective_params": params,
                 "baseline": baseline_result.to_dict(),
                 "shadow": shadow_result.to_dict(),
             }
