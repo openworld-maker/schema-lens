@@ -20,7 +20,7 @@ on:
   issue_comment:
     types: [created]
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled]
   pull_request_review:
     types: [submitted]
 
@@ -38,7 +38,7 @@ jobs:
         startsWith(github.event.comment.body, '/ops run') ||
         startsWith(github.event.comment.body, '/ops resume')
       ))
-    uses: openworld-maker/ops-infra/.github/workflows/autonomous-dev.yml@v1
+    uses: openworld-maker/ops-infra/.github/workflows/autonomous-dev.yml@v1.1
     with:
       issue_number: ${{ github.event.inputs.issue_number || github.event.issue.number || '' }}
       objective: ${{ github.event.inputs.objective || '' }}
@@ -50,9 +50,9 @@ jobs:
   review-autopilot:
     if: >-
       github.event_name == 'schedule' ||
-      github.event_name == 'pull_request' ||
-      github.event_name == 'pull_request_review'
-    uses: openworld-maker/ops-infra/.github/workflows/review-autopilot.yml@v1
+      (github.event_name == 'pull_request' && contains(join(github.event.pull_request.labels.*.name, ','), 'ops:auto')) ||
+      (github.event_name == 'pull_request_review' && contains(join(github.event.pull_request.labels.*.name, ','), 'ops:auto'))
+    uses: openworld-maker/ops-infra/.github/workflows/review-autopilot.yml@v1.1
     with:
       pr_number: ${{ github.event.pull_request.number || '0' }}
       executor_prompt_version: v1.0.0
@@ -61,13 +61,14 @@ jobs:
   merge-gate:
     if: >-
       github.event_name == 'pull_request_review' &&
-      github.event.review.state == 'approved'
-    uses: openworld-maker/ops-infra/.github/workflows/merge-gate.yml@v1
+      github.event.review.state == 'approved' &&
+      contains(join(github.event.pull_request.labels.*.name, ','), 'ops:auto')
+    uses: openworld-maker/ops-infra/.github/workflows/merge-gate.yml@v1.1
     with:
       pr_number: ${{ github.event.pull_request.number }}
     secrets: inherit
 
   watchdog:
     if: github.event_name == 'schedule'
-    uses: openworld-maker/ops-infra/.github/workflows/watchdog.yml@v1
+    uses: openworld-maker/ops-infra/.github/workflows/watchdog.yml@v1.1
     secrets: inherit
