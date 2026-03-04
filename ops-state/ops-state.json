@@ -1,0 +1,13 @@
+{
+  "run_id": "22673036487",
+  "issue_number": 2,
+  "planner_model": "gpt-5",
+  "planner_tokens_last": 6241,
+  "planner_tokens": 6241,
+  "executor_tokens_last": 5967,
+  "executor_tokens": 5967,
+  "executor_model": "gpt-5",
+  "started_at": 1772633616,
+  "iteration": 3,
+  "status": "passed"
+}

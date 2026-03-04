@@ -1,0 +1,256 @@
+{
+  "planned_files": [
+    ".gitignore",
+    "pyproject.toml",
+    "README.md",
+    "schema_lens/__init__.py",
+    "schema_lens/cli.py",
+    "schema_lens/config/__init__.py",
+    "schema_lens/config/changeset.py",
+    "schema_lens/config/query_source.py",
+    "schema_lens/io/jsonl.py",
+    "schema_lens/replay/__init__.py",
+    "schema_lens/replay/solr_client.py",
+    "schema_lens/replay/runner.py",
+    "schema_lens/vector/__init__.py",
+    "schema_lens/vector/blend.py",
+    "schema_lens/vector/metrics.py",
+    "schema_lens/vector/sensitivity.py",
+    "schema_lens/vector/validation.py",
+    "schema_lens/report/__init__.py",
+    "schema_lens/report/vector_hybrid.py",
+    "schema_lens/utils/timing.py",
+    "schema_lens/utils/hash.py",
+    "tests/test_query_parsing.py",
+    "tests/test_contribution_estimate.py",
+    "tests/test_sensitivity.py",
+    "tests/test_dimension_validation.py",
+    "tests/test_blend_normalization.py",
+    "tests/data/queries/minimal_params.jsonl",
+    "tests/data/queries/minimal_json_request.jsonl",
+    "examples/queries/procurement_vector_queries.jsonl",
+    "examples/vectors/embeddings_small.jsonl",
+    "examples/changesets/vector_hybrid.yaml",
+    "examples/solrcloud-docker/docker-compose.yml",
+    "examples/solrcloud-docker/scripts/wait-for-solr.sh",
+    "examples/solrcloud-docker/scripts/bootstrap.sh",
+    "examples/solrcloud-docker/configsets/products_vector/conf/schema.xml",
+    "examples/solrcloud-docker/configsets/products_vector/conf/solrconfig.xml",
+    "examples/solrcloud-docker/configsets/products_vector/conf/managed-schema.readme",
+    ".ops/config.yml",
+    ".github/workflows/ci.yml"
+  ],
+  "edit_strategy": {
+    "phases": [
+      {
+        "name": "Bootstrap and CI wiring",
+        "actions": [
+          "Create pyproject.toml with console_scripts entry 'schema-lens=schema_lens.cli:main' and extras [dev] for test/lint.",
+          "Add .ops/config.yml with install, lint, unit, and integration test commands; reference in .github/workflows/ci.yml.",
+          "Seed .gitignore for Python, venv, cache, and out/ artifacts."
+        ]
+      },
+      {
+        "name": "Configuration and query ingestion",
+        "actions": [
+          "Implement schema_lens/config/changeset.py to extend existing format with vector and scenario sections (backward compatible loaders).",
+          "Implement schema_lens/config/query_source.py dataclasses for QuerySource and QueryCase; support reading from JSONL (params or json_request).",
+          "Implement schema_lens/io/jsonl.py with strict line-by-line parsing, validation, and deterministic sampling (seeded)."
+        ]
+      },
+      {
+        "name": "Solr client and replay runner",
+        "actions": [
+          "Implement schema_lens/replay/solr_client.py to send /select requests using either param dicts or JSON Request API payloads; include timeouts, retries, and response normalization (id, score, numFound, QTime).",
+          "Implement schema_lens/replay/runner.py to execute scenarios: baseline (lexical), vector-only, hybrid (Solr-native vs client-side blend); persist per-scenario outputs deterministically to out/."
+        ]
+      },
+      {
+        "name": "Vector layer and analytics",
+        "actions": [
+          "Implement schema_lens/vector/validation.py to validate vector field presence/dimension vs changeset; allow explicit overrides.",
+          "Implement schema_lens/vector/blend.py with linear blend and normalization options (none, minmax, zscore), union candidate set, and deterministic tie-breaking.",
+          "Implement schema_lens/vector/metrics.py for overlap@K, tau@K (tie-safe approx), churn, dominance, and contribution estimate with confidence.",
+          "Implement schema_lens/vector/sensitivity.py to sweep blend weights and detect tipping points; write out/hybrid_sensitivity.json."
+        ]
+      },
+      {
+        "name": "Reporting and CLI",
+        "actions": [
+          "Implement schema_lens/report/vector_hybrid.py to summarize scenarios, metrics, and per-query drilldowns; mark native vs simulated blending.",
+          "Extend schema_lens/cli.py with flags --scenario, --enable-sensitivity, --weights, --vector-dimension-override; maintain legacy defaults."
+        ]
+      },
+      {
+        "name": "Examples and Docker integration",
+        "actions": [
+          "Provide examples for queries (mix of params and JSON Request API), embeddings, and a changeset demonstrating baseline/vector/hybrid.",
+          "Add Solr docker-compose with configset including vector field; bootstrap/wait scripts; keep dataset small for CI.",
+          "Gate docker/integration steps under pytest -m integration."
+        ]
+      },
+      {
+        "name": "Documentation and polish",
+        "actions": [
+          "Update README with vector/hybrid overview, config examples, CLI flags, limitations, and deterministic behavior notes.",
+          "Ensure all outputs are stable given a fixed seed and that defaults avoid Docker-only paths."
+        ]
+      }
+    ],
+    "backward_compatibility": [
+      "Existing changesets without vector sections continue to run unchanged.",
+      "CLI defaults mirror current behavior unless new flags are specified."
+    ],
+    "determinism": [
+      "Central RNG seeded from changeset or default (e.g., 1337) for sampling and tie-breaking.",
+      "Stable output ordering using secondary keys (id) when scores tie."
+    ]
+  },
+  "test_sequence": [
+    {
+      "name": "Environment setup",
+      "commands": [
+        "python -m pip install -e .[dev]"
+      ],
+      "notes": [
+        "Installs package in editable mode with dev dependencies.",
+        "Set SCHEMA_LENS_SEED=1337 in test environment for stability."
+      ]
+    },
+    {
+      "name": "Static analysis",
+      "commands": [
+        "ruff check ."
+      ],
+      "notes": [
+        "Style and lint checks; keeps codebase consistent."
+      ]
+    },
+    {
+      "name": "Unit tests (no Docker)",
+      "commands": [
+        "pytest -q -m 'not integration'"
+      ],
+      "covers": [
+        "Query parsing for params and JSON Request API",
+        "Blend normalization correctness",
+        "Contribution estimate metrics",
+        "Vector dimension validation and overrides",
+        "Sensitivity tipping-point detection"
+      ],
+      "artifacts": [
+        "out/* unit artifacts are minimal; no Solr required"
+      ]
+    },
+    {
+      "name": "Start Solr for integration",
+      "commands": [
+        "docker compose -f examples/solrcloud-docker/docker-compose.yml up -d --wait"
+      ],
+      "notes": [
+        "Waits for Solr to be healthy before tests.",
+        "Retries handled in wait-for-solr.sh"
+      ]
+    },
+    {
+      "name": "Integration tests (Docker)",
+      "commands": [
+        "pytest -q -m integration"
+      ],
+      "covers": [
+        "Configset upload and collection readiness",
+        "Indexing of example embeddings",
+        "Baseline, vector-only, and hybrid scenarios via Solr client",
+        "Report and sensitivity artifacts creation and schema validation"
+      ],
+      "artifacts": [
+        "out/replay_*.json",
+        "out/hybrid_sensitivity.json",
+        "report outputs"
+      ]
+    },
+    {
+      "name": "Teardown Docker",
+      "commands": [
+        "docker compose -f examples/solrcloud-docker/docker-compose.yml down -v"
+      ],
+      "notes": [
+        "Removes containers and volumes to keep CI clean."
+      ]
+    }
+  ],
+  "risk_controls": [
+    {
+      "risk": "Solr version variance for vector similarity and JSON Request API",
+      "controls": [
+        "Feature detection via /admin/info/system and /schema endpoints; gracefully degrade or require explicit overrides.",
+        "Normalized JSON Request construction with tolerant parsing; fall back to params when feasible.",
+        "Document supported Solr versions in README."
+      ]
+    },
+    {
+      "risk": "Schema inspection may not expose vector dimension",
+      "controls": [
+        "Validate against changeset-declared dimension; if unknown, require --vector-dimension-override.",
+        "Fail fast with human-readable errors and remediation hints.",
+        "Block replay when blank or mismatched vectors detected."
+      ]
+    },
+    {
+      "risk": "Performance issues from large candidate unions",
+      "controls": [
+        "Cap candidate sets deterministically (e.g., topK and topN) with configurable limits.",
+        "Disable debug by default; measure client elapsed separately; use efficient data structures."
+      ]
+    },
+    {
+      "risk": "Integration test flakiness due to Solr startup",
+      "controls": [
+        "Use wait-for-solr.sh with retries and timeouts.",
+        "Mark tests with -m integration and gate under Docker availability.",
+        "Increase HTTP client timeouts and include limited retries with backoff."
+      ]
+    },
+    {
+      "risk": "Heuristic contribution estimates misinterpreted",
+      "controls": [
+        "Label estimates with confidence levels; include methodology note in report.",
+        "Provide metrics alongside estimates (overlap, tau, churn) for context."
+      ]
+    },
+    {
+      "risk": "Network timeouts to Solr in CI",
+      "controls": [
+        "Set sensible connect/read timeouts and small retry budget in solr_client.",
+        "Surface partial results clearly and continue other queries; log summary."
+      ]
+    },
+    {
+      "risk": "Backward compatibility regressions",
+      "controls": [
+        "Maintain default CLI behavior; only enable vector/hybrid via explicit config/flags.",
+        "Add unit tests that load legacy changesets (no vector) and assert identical code paths."
+      ]
+    },
+    {
+      "risk": "Non-deterministic outputs",
+      "controls": [
+        "Centralize RNG seeding; sort ties by stable keys; snapshot normalization parameters in outputs.",
+        "Pin example datasets and cap sampling with recorded seeds."
+      ]
+    }
+  ],
+  "estimated_change_size": {
+    "files_touched": 39,
+    "new_files_estimate": 30,
+    "modified_files_estimate": 9,
+    "loc_added_estimate": 2200,
+    "loc_modified_estimate": 300,
+    "test_loc_estimate": 700,
+    "complexity": "Medium-High",
+    "notes": [
+      "Core additions span new vector, replay, and report modules plus examples and CI.",
+      "LOC estimates include docstrings and tests; examples and YAML/JSONL not heavily counted."
+    ]
+  }
+}

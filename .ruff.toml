@@ -1,0 +1,15 @@
+target-version = "py311"
+line-length = 100
+
+# Keep Ruff deterministic and focused on project sources.
+# Exclude generated, ops, docker, build, and virtual-env paths that may contain non-conforming code.
+extend-exclude = [
+  "_ops_infra",
+  "ops-state",
+  "out",
+  ".venv",
+  "build",
+  "dist",
+  ".tox",
+  "examples/solrcloud-docker",
+]

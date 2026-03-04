@@ -1,0 +1,9 @@
+{
+  "attempt": 3,
+  "install_cmd": "python3 -m pip install -e '.[dev]'",
+  "lint_cmd": "ruff check .",
+  "test_cmd": "pytest -q -m 'not integration'",
+  "install_status": "pass",
+  "lint_status": "pass",
+  "test_status": "pass"
+}

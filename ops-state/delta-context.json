@@ -1,0 +1,13 @@
+{
+  "attempt": 2,
+  "failure_summary": {
+    "attempt": 2,
+    "install_cmd": "python3 -m pip install -e '.[dev]'",
+    "lint_cmd": "ruff check .",
+    "test_cmd": "pytest -q -m 'not integration'",
+    "install_status": "pass",
+    "lint_status": "fail",
+    "test_status": "pass"
+  },
+  "changed_files": "?? _ops_infra/\n?? ops-state/\n"
+}
