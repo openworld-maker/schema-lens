@@ -20,21 +20,29 @@ from schema_lens.compare.explain_fetcher import fetch_explains
 from schema_lens.compare.gate import evaluate_gate, load_gate_policy
 from schema_lens.compare.rewrite_diff import load_synonym_rules_from_changes, run_rewrite_diff
 from schema_lens.config import RunManifest
+from schema_lens.dashboard.app import create_dashboard_app
 from schema_lens.data.docs_loader import load_docs
 from schema_lens.data.solr_sampler import sample_docs_from_solr
+from schema_lens.env_compare.runner import compare_environments
 from schema_lens.errors import StageError
 from schema_lens.golden.discover import discover_golden_queries
 from schema_lens.golden.model import GoldenQuery
 from schema_lens.golden.store import append_golden
 from schema_lens.http.client import SolrHttpClient
 from schema_lens.logging import configure_logging
+from schema_lens.ltr.capture import capture_ltr_impact
+from schema_lens.monitor.runner import run_monitor
+from schema_lens.perf.analyzer import analyze_performance
+from schema_lens.perf.solr_metrics import collect_solr_runtime_snapshot
 from schema_lens.queries.loader import load_queries
 from schema_lens.queries.sampler import sample_queries
 from schema_lens.queries.sanitize import sanitize_params
 from schema_lens.queries.sources.solr_request_log import extract_queries_from_log
+from schema_lens.recommend.engine import build_recommendations
 from schema_lens.replay.runner import run_replay
 from schema_lens.report.html_report import render_html_report
 from schema_lens.report.json_report import build_report_json
+from schema_lens.rootcause.engine import analyze_root_causes
 from schema_lens.schema.preflight import run_preflight
 from schema_lens.shadow.manager import cleanup_shadow, create_shadow
 from schema_lens.snapshot.snapshotter import capture_snapshot, load_snapshot
@@ -45,6 +53,15 @@ from schema_lens.solr.update_api import post_docs
 from schema_lens.util.git import current_git_commit_short
 from schema_lens.util.io import ensure_dir, read_json, write_json, write_jsonl, write_text
 from schema_lens.util.time import utc_now_iso
+from schema_lens.vector.compare import compare_vector_hybrid
+from schema_lens.vector.replay import run_vector_scenarios
+from schema_lens.vector.scenario_parser import parse_vector_runtime_config
+from schema_lens.vector.sensitivity import run_hybrid_sensitivity
+from schema_lens.vector.validation import (
+    augment_docs_with_embeddings,
+    load_embeddings,
+    validate_vector_setup,
+)
 
 app = typer.Typer(help="Schema Lens: Solr schema evolution impact simulator")
 shadow_app = typer.Typer(help="Shadow collection operations")
@@ -75,6 +92,30 @@ def _resolve_path(base_file: Path, maybe_rel: str) -> Path:
     if from_cwd.exists():
         return from_cwd
     return from_changeset
+
+
+def _parse_weights(raw: str | None) -> list[float] | None:
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    weights: list[float] = []
+    for chunk in text.split(","):
+        value = chunk.strip()
+        if not value:
+            continue
+        try:
+            weights.append(float(value))
+        except ValueError as exc:
+            raise typer.BadParameter(f"Invalid weight value: {value}") from exc
+    if not weights:
+        return None
+    return weights
+
+
+def _disabled_section(reason: str) -> dict[str, Any]:
+    return {"enabled": False, "reason": reason}
 
 
 def _inspect_collection(solr_url: str, collection: str, verbose: bool = False) -> dict[str, Any]:
@@ -375,6 +416,117 @@ def ci_summarize(
     typer.echo(markdown)
 
 
+@app.command("recommend")
+def recommend(
+    run: Path = typer.Option(..., "--run", exists=True, readable=True),
+    out: Path = typer.Option(..., "--out"),
+) -> None:
+    """Generate recommendations from a completed run directory."""
+    compare_path = run / "compare.json"
+    if not compare_path.exists():
+        raise typer.BadParameter(f"compare.json not found under {run}")
+    compare_data = read_json(compare_path)
+    root_causes = compare_data.get("root_causes")
+    if not isinstance(root_causes, dict):
+        root_causes = analyze_root_causes(
+            compare_data=compare_data,
+            changes=[],
+            baseline_request_defaults={},
+        )
+    payload = build_recommendations(root_causes)
+    write_json(out, payload)
+    typer.echo(str(out))
+
+
+@app.command("compare-env")
+def compare_env(
+    env1: Path = typer.Option(..., "--env1", exists=True, readable=True),
+    env2: Path = typer.Option(..., "--env2", exists=True, readable=True),
+    queries: Path = typer.Option(..., "--queries", exists=True, readable=True),
+    out: Path = typer.Option(..., "--out"),
+    k: int = typer.Option(10, "--k"),
+    query_format: str = typer.Option("jsonl", "--query-format"),
+    max_queries: int | None = typer.Option(None, "--max-queries"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Compare two live environments."""
+    configure_logging(verbose)
+    payload = compare_environments(
+        env1_path=env1,
+        env2_path=env2,
+        queries_path=queries,
+        query_format=query_format,
+        k=k,
+        max_queries=max_queries,
+        verbose=verbose,
+    )
+    ensure_dir(out)
+    write_json(out / "replay.json", payload["replay"])
+    write_json(out / "compare.json", payload["compare"])
+    report_data = build_report_json(
+        manifest={
+            "inputs": {
+                "env1": str(env1.resolve()),
+                "env2": str(env2.resolve()),
+                "queries_path": str(queries.resolve()),
+            },
+            "outputs": {
+                "compare_json": str((out / "compare.json").resolve()),
+                "report_json": str((out / "report.json").resolve()),
+                "report_html": str((out / "report.html").resolve()),
+                "env_compare_json": str((out / "env_compare.json").resolve()),
+            },
+        },
+        compare_data=payload["compare"],
+        replay_data=payload["replay"],
+    )
+    write_json(out / "env_compare.json", payload["compare"])
+    write_json(out / "report.json", report_data)
+    template_dir = Path(__file__).parent / "report" / "templates"
+    write_text(out / "report.html", render_html_report(report_data, template_dir))
+    typer.echo(str((out / "report.json").resolve()))
+
+
+@app.command("serve")
+def serve(
+    run: Path | None = typer.Option(None, "--run", exists=True, readable=True),
+    compare: Path | None = typer.Option(None, "--compare", exists=True, readable=True),
+    port: int = typer.Option(8080, "--port"),
+) -> None:
+    """Serve a read-only local dashboard for run artifacts."""
+    import uvicorn
+
+    if run is None and compare is None:
+        raise typer.BadParameter("Provide either --run or --compare")
+    if run is not None and compare is not None:
+        raise typer.BadParameter("Use only one of --run or --compare")
+    source = run if run is not None else compare
+    assert source is not None
+    base_path = source if source.is_dir() else source.parent
+    app_instance = create_dashboard_app(base_path.resolve())
+    uvicorn.run(app_instance, host="127.0.0.1", port=port)
+
+
+@app.command("monitor")
+def monitor(
+    baseline_snapshot: Path = typer.Option(..., "--baseline-snapshot", exists=True, readable=True),
+    queries: Path = typer.Option(..., "--queries", exists=True, readable=True),
+    interval: str = typer.Option("24h", "--interval"),
+    out: Path = typer.Option(..., "--out"),
+    query_format: str = typer.Option("jsonl", "--query-format"),
+) -> None:
+    """Run one-shot drift monitoring from a prior run/snapshot directory."""
+    ensure_dir(out)
+    run_monitor(
+        baseline_snapshot_dir=baseline_snapshot,
+        queries_path=queries,
+        query_format=query_format,
+        interval=interval,
+        out_dir=out,
+    )
+    typer.echo(str((out / "latest_monitor.json").resolve()))
+
+
 @app.command()
 def replay(
     baseline_solr_url: str = typer.Option(..., "--baseline-solr-url"),
@@ -429,6 +581,26 @@ def compare(
     """Compare replay outputs and compute metrics."""
     replay_data = read_json(replay)
     compare_data = compare_replay(replay_data, k=k)
+    compare_data.setdefault(
+        "performance",
+        {"enabled": False, "reason": "Performance capture not enabled."},
+    )
+    compare_data.setdefault(
+        "root_causes",
+        {"enabled": False, "reason": "Root-cause analysis not generated."},
+    )
+    compare_data.setdefault(
+        "recommendations",
+        {"enabled": False, "reason": "Recommendations not generated."},
+    )
+    compare_data.setdefault(
+        "environment_compare",
+        {"enabled": False, "reason": "Environment compare not generated."},
+    )
+    compare_data.setdefault(
+        "ltr_impact",
+        {"enabled": False, "reason": "LTR impact not available."},
+    )
     write_json(out, compare_data)
     typer.echo(str(out))
 
@@ -511,6 +683,12 @@ def run(
     k: int | None = typer.Option(None, "--k"),
     cleanup: bool | None = typer.Option(None, "--cleanup/--no-cleanup"),
     batch_size: int = typer.Option(100, "--batch-size"),
+    scenario: list[str] | None = typer.Option(None, "--scenario"),
+    enable_sensitivity: bool | None = typer.Option(
+        None, "--enable-sensitivity/--no-enable-sensitivity"
+    ),
+    weights: str | None = typer.Option(None, "--weights"),
+    vector_dimension_override: int | None = typer.Option(None, "--vector-dimension-override"),
     verbose: bool = typer.Option(False, "--verbose"),
 ) -> None:
     """Run full end-to-end schema lens workflow."""
@@ -542,6 +720,14 @@ def run(
             "queries_extracted_jsonl": str((out / "queries_extracted.jsonl").resolve()),
             "replay_json": str((out / "replay.json").resolve()),
             "compare_json": str((out / "compare.json").resolve()),
+            "vector_validation_json": str((out / "vector_validation.json").resolve()),
+            "hybrid_sensitivity_json": str((out / "hybrid_sensitivity.json").resolve()),
+            "perf_metrics_json": str((out / "perf_metrics.json").resolve()),
+            "rootcauses_json": str((out / "rootcauses.json").resolve()),
+            "recommendations_json": str((out / "recommendations.json").resolve()),
+            "env_compare_json": str((out / "env_compare.json").resolve()),
+            "monitor_history_jsonl": str((out / "monitor_history.jsonl").resolve()),
+            "ltr_impact_json": str((out / "ltr_impact.json").resolve()),
             "report_json": str((out / "report.json").resolve()),
             "report_html": str((out / "report.html").resolve()),
         },
@@ -564,6 +750,8 @@ def run(
     effective_cleanup = (
         cleanup if cleanup is not None else bool(shadow_cfg.get("cleanup", True))
     )
+    selected_scenarios = [item for item in (scenario or []) if item]
+    sensitivity_weights = _parse_weights(weights)
 
     manifest.settings.update(
         {
@@ -572,6 +760,12 @@ def run(
             "sample_n": data_cfg.get("sample_n"),
             "max_queries": query_cfg.get("max_queries"),
             "git_commit": current_git_commit_short(Path.cwd()),
+            "vector_cli_overrides": {
+                "scenario": selected_scenarios,
+                "enable_sensitivity": enable_sensitivity,
+                "weights": sensitivity_weights,
+                "vector_dimension_override": vector_dimension_override,
+            },
         }
     )
 
@@ -600,6 +794,16 @@ def run(
     if docs_path:
         manifest.inputs["docs_path"] = str(docs_path)
 
+    vector_runtime_cfg = parse_vector_runtime_config(
+        changeset_vector=changeset.vector if hasattr(changeset, "vector") else {},
+        evaluation_cfg=eval_cfg,
+        default_top_k=effective_k,
+        selected_scenarios=selected_scenarios or None,
+        sensitivity_enabled_override=enable_sensitivity,
+        sensitivity_weights_override=sensitivity_weights,
+    )
+    manifest.settings["vector"] = vector_runtime_cfg.to_dict()
+
     baseline_client = SolrHttpClient(baseline_url, verbose=verbose)
     shadow_client = SolrHttpClient(shadow_url, verbose=verbose)
     run_started = perf_counter()
@@ -608,10 +812,24 @@ def run(
     replay_data: dict[str, Any] = {}
     compare_data: dict[str, Any] = {}
     schema_risk_data: dict[str, Any] = {}
+    vector_validation_data: dict[str, Any] = {"enabled": False}
+    vector_replay_data: dict[str, Any] = {"enabled": False}
+    hybrid_sensitivity_data: dict[str, Any] = {"enabled": False}
+    perf_metrics_data: dict[str, Any] = _disabled_section(
+        "Performance capture not enabled."
+    )
+    root_causes_data: dict[str, Any] = _disabled_section(
+        "Root-cause analysis not generated."
+    )
+    recommendations_data: dict[str, Any] = _disabled_section(
+        "Recommendations not generated."
+    )
+    ltr_impact_data: dict[str, Any] = _disabled_section("LTR impact not available.")
     docs_payload: list[dict[str, Any]] = []
     query_cases = []
     baseline_schema: dict[str, Any] = {}
     inspect_payload: dict[str, Any] = {}
+    perf_before: dict[str, Any] = {"baseline": {}, "shadow": {}}
 
     def stage(name: str):
         class StageCtx:
@@ -790,6 +1008,35 @@ def run(
                     "batch_size": source_batch_size,
                 }
 
+            if vector_runtime_cfg.enabled:
+                embedding_source = (
+                    vector_runtime_cfg.embedding_source
+                    if isinstance(vector_runtime_cfg.embedding_source, dict)
+                    else {}
+                )
+                embedding_map, embedding_source_type = load_embeddings(
+                    embedding_source=embedding_source,
+                    changeset_path=changeset_path,
+                )
+                if embedding_map:
+                    id_field = str(embedding_source.get("id_field", "id"))
+                    vector_field = str(
+                        embedding_source.get("vector_field", vector_runtime_cfg.field)
+                    )
+                    embedding_stats = augment_docs_with_embeddings(
+                        docs=docs_payload,
+                        embedding_map=embedding_map,
+                        id_field=id_field,
+                        vector_field=vector_field,
+                    )
+                    manifest.settings["vector_embedding_ingest"] = {
+                        "source_type": embedding_source_type,
+                        "path": embedding_source.get("path"),
+                        "id_field": id_field,
+                        "vector_field": vector_field,
+                        "stats": embedding_stats,
+                    }
+
         with stage("index"):
             if not shadow_name:
                 raise StageError("Shadow name unavailable during indexing stage")
@@ -862,6 +1109,62 @@ def run(
                 }
                 query_cases = load_queries(extracted_path, fmt="jsonl")
 
+        with stage("vector_validate"):
+            if vector_runtime_cfg.enabled:
+                vector_validation_data = validate_vector_setup(
+                    baseline_schema=baseline_schema,
+                    vector_cfg=vector_runtime_cfg,
+                    query_cases=query_cases,
+                    vector_dimension_override=vector_dimension_override,
+                )
+                write_json(
+                    Path(manifest.outputs["vector_validation_json"]),
+                    vector_validation_data,
+                )
+                manifest.settings["vector_validation"] = {
+                    "summary": vector_validation_data.get("summary", {}),
+                    "migration_required": vector_validation_data.get("migration_required", False),
+                }
+                if vector_validation_data.get("block_run"):
+                    raise StageError("vector validation blocked run")
+            else:
+                vector_validation_data = {"enabled": False, "findings": []}
+                write_json(Path(manifest.outputs["vector_validation_json"]), vector_validation_data)
+
+        with stage("performance_prepare"):
+            perf_cfg = changeset.raw.get("performance", {})
+            if isinstance(perf_cfg, dict) and perf_cfg.get("enabled", False):
+                cache_cfg = perf_cfg.get("caches", {})
+                cache_names = (
+                    cache_cfg.get("names")
+                    if isinstance(cache_cfg, dict) and isinstance(cache_cfg.get("names"), list)
+                    else None
+                )
+                perf_before = {
+                    "baseline": collect_solr_runtime_snapshot(
+                        client=baseline_client,
+                        collection=baseline_collection,
+                        cache_names=cache_names,
+                        include_luke=bool(
+                            (perf_cfg.get("index", {}) or {}).get("luke", True)
+                            if isinstance(perf_cfg.get("index"), dict)
+                            else True
+                        ),
+                    ),
+                    "shadow": collect_solr_runtime_snapshot(
+                        client=shadow_client,
+                        collection=shadow_name or "",
+                        cache_names=cache_names,
+                        include_luke=bool(
+                            (perf_cfg.get("index", {}) or {}).get("luke", True)
+                            if isinstance(perf_cfg.get("index"), dict)
+                            else True
+                        ),
+                    ),
+                }
+            else:
+                perf_before = {"baseline": {}, "shadow": {}}
+
         with stage("replay"):
             if not shadow_name:
                 raise StageError("Shadow name unavailable during replay stage")
@@ -899,6 +1202,70 @@ def run(
         with stage("compare"):
             compare_data = compare_replay(replay_data, effective_k)
             compare_data["schema_safety_findings"] = schema_risk_data
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+
+        with stage("scenario_replay"):
+            if vector_runtime_cfg.enabled:
+                if not shadow_name:
+                    raise StageError("Shadow name unavailable during scenario_replay stage")
+                request_defaults = baseline_cfg.get("request_defaults", {})
+                merged_defaults = merge_queryparams(request_defaults, changeset.changes)
+                vector_replay_data = run_vector_scenarios(
+                    baseline_client=baseline_client,
+                    baseline_collection=baseline_collection,
+                    shadow_client=shadow_client,
+                    shadow_collection=shadow_name,
+                    queries=query_cases,
+                    request_defaults=merged_defaults,
+                    vector_cfg=vector_runtime_cfg,
+                )
+                replay_data["vector_scenarios"] = vector_replay_data
+                write_json(Path(manifest.outputs["replay_json"]), replay_data)
+
+                per_scenario_paths: dict[str, str] = {}
+                scenario_results = vector_replay_data.get("scenario_results", {})
+                if isinstance(scenario_results, dict):
+                    for scenario_name, payload in scenario_results.items():
+                        safe = "".join(
+                            ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in scenario_name
+                        )
+                        scenario_path = out / f"replay_{safe}.json"
+                        write_json(scenario_path, payload)
+                        per_scenario_paths[scenario_name] = str(scenario_path.resolve())
+                manifest.outputs["replay_scenarios"] = per_scenario_paths
+            else:
+                vector_replay_data = {"enabled": False, "scenario_results": {}}
+
+        with stage("vector_compare"):
+            if vector_runtime_cfg.enabled:
+                vector_compare = compare_vector_hybrid(
+                    scenario_replay=vector_replay_data,
+                    top_k=int(vector_runtime_cfg.evaluation.get("topK", effective_k)),
+                )
+                compare_data["vector_hybrid"] = vector_compare
+            else:
+                compare_data["vector_hybrid"] = {"enabled": False}
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+
+        with stage("hybrid_sensitivity"):
+            sensitivity_cfg = (
+                vector_runtime_cfg.evaluation.get("sensitivity", {})
+                if isinstance(vector_runtime_cfg.evaluation, dict)
+                else {}
+            )
+            if vector_runtime_cfg.enabled and bool(sensitivity_cfg.get("enabled", False)):
+                hybrid_sensitivity_data = run_hybrid_sensitivity(
+                    scenario_replay=vector_replay_data,
+                    weights=[float(w) for w in sensitivity_cfg.get("weights", [])],
+                    top_k=int(vector_runtime_cfg.evaluation.get("topK", effective_k)),
+                    candidate_pool=int(
+                        vector_runtime_cfg.evaluation.get("candidate_pool", max(100, effective_k))
+                    ),
+                )
+            else:
+                hybrid_sensitivity_data = {"enabled": False, "weights": [], "scenarios": []}
+            compare_data["hybrid_sensitivity"] = hybrid_sensitivity_data
+            write_json(Path(manifest.outputs["hybrid_sensitivity_json"]), hybrid_sensitivity_data)
             write_json(Path(manifest.outputs["compare_json"]), compare_data)
 
         with stage("rewrite_diff"):
@@ -978,6 +1345,84 @@ def run(
                 write_json(Path(manifest.outputs["compare_json"]), compare_data)
             else:
                 compare_data["explain_bundles"] = []
+
+        with stage("performance_analyze"):
+            perf_cfg = changeset.raw.get("performance", {})
+            if isinstance(perf_cfg, dict) and perf_cfg.get("enabled", False):
+                cache_cfg = perf_cfg.get("caches", {})
+                cache_names = (
+                    cache_cfg.get("names")
+                    if isinstance(cache_cfg, dict) and isinstance(cache_cfg.get("names"), list)
+                    else None
+                )
+                perf_after = {
+                    "baseline": collect_solr_runtime_snapshot(
+                        client=baseline_client,
+                        collection=baseline_collection,
+                        cache_names=cache_names,
+                        include_luke=bool(
+                            (perf_cfg.get("index", {}) or {}).get("luke", True)
+                            if isinstance(perf_cfg.get("index"), dict)
+                            else True
+                        ),
+                    ),
+                    "shadow": collect_solr_runtime_snapshot(
+                        client=shadow_client,
+                        collection=shadow_name or "",
+                        cache_names=cache_names,
+                        include_luke=bool(
+                            (perf_cfg.get("index", {}) or {}).get("luke", True)
+                            if isinstance(perf_cfg.get("index"), dict)
+                            else True
+                        ),
+                    ),
+                }
+                percentiles_capture = perf_cfg.get("capture")
+                percentiles_cfg = (
+                    percentiles_capture if isinstance(percentiles_capture, dict) else {}
+                )
+                percentiles = (
+                    percentiles_cfg.get("percentiles")
+                    if isinstance(percentiles_cfg.get("percentiles"), list)
+                    else [50, 95, 99]
+                )
+                perf_metrics_data = analyze_performance(
+                    replay_data=replay_data,
+                    compare_data=compare_data,
+                    baseline_snapshot=perf_after["baseline"],
+                    shadow_snapshot=perf_after["shadow"],
+                    changes=changeset.changes,
+                    percentiles=[int(item) for item in percentiles],
+                )
+                perf_metrics_data["before"] = perf_before
+                perf_metrics_data["after"] = perf_after
+            else:
+                perf_metrics_data = _disabled_section("Performance capture not enabled.")
+                compare_data["performance"] = perf_metrics_data
+            write_json(Path(manifest.outputs["perf_metrics_json"]), perf_metrics_data)
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+
+        with stage("root_cause"):
+            root_causes_data = analyze_root_causes(
+                compare_data=compare_data,
+                changes=changeset.changes,
+                baseline_request_defaults=baseline_cfg.get("request_defaults", {}),
+            )
+            compare_data["root_causes"] = root_causes_data
+            write_json(Path(manifest.outputs["rootcauses_json"]), root_causes_data)
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+
+        with stage("recommend"):
+            recommendations_data = build_recommendations(root_causes_data)
+            compare_data["recommendations"] = recommendations_data
+            write_json(Path(manifest.outputs["recommendations_json"]), recommendations_data)
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+
+        with stage("ltr"):
+            ltr_impact_data = capture_ltr_impact(replay_data)
+            compare_data["ltr_impact"] = ltr_impact_data
+            write_json(Path(manifest.outputs["ltr_impact_json"]), ltr_impact_data)
+            write_json(Path(manifest.outputs["compare_json"]), compare_data)
 
         with stage("report"):
             report_data = build_report_json(

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "schema-lens"
-version = "0.1.2"
+version = "0.2.0"
 description = "Schema Evolution & Impact Simulator for Solr"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -17,6 +17,8 @@ dependencies = [
   "httpx>=0.27.0",
   "PyYAML>=6.0.1",
   "Jinja2>=3.1.4",
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]

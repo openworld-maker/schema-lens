@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<schema name="products_vector" version="1.6">
+  <uniqueKey>id</uniqueKey>
+
+  <field name="id" type="string" indexed="true" stored="true" required="true" multiValued="false"/>
+  <field name="title" type="text_general" indexed="true" stored="true"/>
+  <field name="longDesc" type="text_general" indexed="true" stored="true"/>
+  <field name="category" type="string" indexed="true" stored="true"/>
+  <field name="mpn" type="string" indexed="true" stored="true"/>
+  <field name="manufacturer" type="string" indexed="true" stored="true"/>
+  <field name="emb" type="vector_8" indexed="true" stored="true" multiValued="false"/>
+  <field name="_version_" type="plong" indexed="false" stored="false"/>
+
+  <dynamicField name="*_s" type="string" indexed="true" stored="true"/>
+  <dynamicField name="*_str" type="string" indexed="true" stored="true"/>
+
+  <fieldType name="string" class="solr.StrField" sortMissingLast="true" docValues="true"/>
+  <fieldType name="booleans" class="solr.BoolField" sortMissingLast="true" docValues="true"/>
+  <fieldType name="pdates" class="solr.DatePointField" docValues="true"/>
+  <fieldType name="plong" class="solr.LongPointField" docValues="true"/>
+  <fieldType name="plongs" class="solr.LongPointField" docValues="true"/>
+  <fieldType name="pdoubles" class="solr.DoublePointField" docValues="true"/>
+
+  <fieldType name="text_general" class="solr.TextField" positionIncrementGap="100">
+    <analyzer type="index">
+      <tokenizer class="solr.StandardTokenizerFactory"/>
+      <filter class="solr.LowerCaseFilterFactory"/>
+      <filter class="solr.StopFilterFactory" ignoreCase="true" words="stopwords.txt"/>
+      <filter class="solr.SynonymGraphFilterFactory" ignoreCase="true" expand="true" synonyms="synonyms.txt"/>
+    </analyzer>
+    <analyzer type="query">
+      <tokenizer class="solr.StandardTokenizerFactory"/>
+      <filter class="solr.LowerCaseFilterFactory"/>
+      <filter class="solr.StopFilterFactory" ignoreCase="true" words="stopwords.txt"/>
+      <filter class="solr.SynonymGraphFilterFactory" ignoreCase="true" expand="true" synonyms="synonyms.txt"/>
+    </analyzer>
+  </fieldType>
+
+  <fieldType name="vector_8" class="solr.DenseVectorField" vectorDimension="8" similarityFunction="cosine"/>
+</schema>

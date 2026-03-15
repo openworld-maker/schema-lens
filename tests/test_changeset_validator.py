@@ -201,3 +201,80 @@ def test_validator_rejects_invalid_configset_op_shapes(tmp_path):
     assert not report.ok
     assert any(".mode must be one of" in err for err in report.errors)
     assert any("evaluation.rewrite_diff.enabled" in err for err in report.errors)
+
+
+def test_validator_accepts_vector_hybrid_sections(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.jsonl"
+    embeddings = tmp_path / "embeddings.jsonl"
+    docs.write_text('{"id":"1","emb":[0.1,0.2,0.3,0.4]}\n', encoding="utf-8")
+    queries.write_text(
+        '{"params":{"q":"bolt"},"vector":[0.1,0.2,0.3,0.4]}\n',
+        encoding="utf-8",
+    )
+    embeddings.write_text('{"id":"1","emb":[0.1,0.2,0.3,0.4]}\n', encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs), "format": "jsonl"}},
+        "queries": {"source": {"type": "file", "path": str(queries), "format": "jsonl"}},
+        "changes": [{"op": "queryparams.set", "set": {"qf": "title^2"}}],
+        "vector": {
+            "enabled": True,
+            "field": "emb",
+            "dimension": 4,
+            "similarity": "cosine",
+            "query_vector_policy": "skip",
+            "embedding_source": {"type": "file", "path": str(embeddings)},
+            "scenarios": [
+                {"name": "lexical_only", "mode": "lexical_only"},
+                {"name": "vector_only", "mode": "vector_only", "knn": {"k": 20, "topK": 10}},
+                {
+                    "name": "hybrid",
+                    "mode": "hybrid",
+                    "knn": {"k": 20, "topK": 10},
+                    "blend": {"method": "linear", "execution": "client"},
+                },
+            ],
+        },
+        "evaluation": {
+            "vector_hybrid": {
+                "enabled": True,
+                "topK": 10,
+                "candidate_pool": 50,
+                "sensitivity": {"enabled": True, "weights": [0.9, 0.7]},
+            }
+        },
+    }
+
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_vector_sections(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "vector": {
+            "enabled": True,
+            "field": "",
+            "similarity": "bad",
+            "query_vector_policy": "maybe",
+            "scenarios": [{"name": "bad", "mode": "hybrid", "blend": {"method": "unknown"}}],
+        },
+        "evaluation": {"vector_hybrid": {"topK": 0, "sensitivity": {"weights": ["x"]}}},
+    }
+
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert not report.ok
+    assert any("vector.field" in err for err in report.errors)
+    assert any("vector.similarity" in err for err in report.errors)
+    assert any("vector.query_vector_policy" in err for err in report.errors)
+    assert any("evaluation.vector_hybrid.topK" in err for err in report.errors)

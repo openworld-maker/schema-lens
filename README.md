@@ -6,7 +6,7 @@ It runs a change plan against a shadow collection, replays baseline vs shadow qu
 ranking/facet/filter/sort deltas, captures optional explain + rewrite debug diffs, and emits
 reproducible JSON/HTML artifacts for human review and CI gates.
 
-Current version: `v0.1.3`
+Current version: `v0.2.0`
 
 ## Table of contents
 
@@ -17,10 +17,12 @@ Current version: `v0.1.3`
 - [Requirements](#requirements)
 - [Quickstart (basic)](#quickstart-basic)
 - [Quickstart (synonym rewrite impact)](#quickstart-synonym-rewrite-impact)
+- [Quickstart (vector and hybrid simulation)](#quickstart-vector-and-hybrid-simulation)
 - [CLI reference](#cli-reference)
 - [Changeset reference](#changeset-reference)
 - [Output artifacts](#output-artifacts)
 - [Quality gate and CI usage](#quality-gate-and-ci-usage)
+- [Architecture](#architecture)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Safety notes](#safety-notes)
@@ -71,6 +73,14 @@ way to answer:
     - `REWRITE_CLAUSE_SPIKE`
     - `SYNONYM_EXPANSION_CHANGED`
     - `PARSED_QUERY_SHAPE_CHANGED`
+- Vector and hybrid ranking simulation:
+  - scenario modes: `lexical_only`, `vector_only`, `hybrid`
+  - query input supports `params` and `json_request`
+  - vector similarity sanity checks (field, dimension, similarity)
+  - vector retrieval stability metrics and semantic churn
+  - client-side hybrid blending (`linear`, `normalize_linear`, `rrf`) with Solr-native fallback
+  - lexical vs vector contribution estimates with dominance/confidence labels
+  - optional weight sensitivity sweep and tipping-point detection
 - Query sourcing:
   - file (`simple`, `jsonl`)
   - log extraction with sanitization and sampling
@@ -151,6 +161,111 @@ automatically falls back to `debugQuery=true` for rewrite extraction.
 - `data.docs_source.type=solr` for export/cursorMark sampling.
 - `preflight` schema dependency safety findings in `schema_risk.json`.
 - `gate` + `ci summarize` for rollout policy enforcement in CI.
+
+### 4) Vector and hybrid simulation
+
+Enable vector-aware scenarios in changeset:
+
+```yaml
+vector:
+  enabled: true
+  field: "emb"
+  dimension: 8
+  similarity: "cosine"
+  query_vector_policy: "skip" # skip|fail
+  scenarios:
+    - name: "lexical_only"
+      mode: "lexical_only"
+    - name: "vector_only"
+      mode: "vector_only"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+    - name: "hybrid_blend_70_30"
+      mode: "hybrid"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+      blend:
+        method: "normalize_linear" # linear|normalize_linear|rrf
+        execution: "client" # auto|client|solr_native
+        weight_lexical: 0.7
+        weight_vector: 0.3
+        normalize: "zscore"
+
+evaluation:
+  vector_hybrid:
+    enabled: true
+    topK: 10
+    candidate_pool: 100
+    sensitivity:
+      enabled: true
+      weights: [0.9, 0.7, 0.5, 0.3]
+```
+
+Run-time overrides:
+
+- `--scenario <name>` (repeatable)
+- `--enable-sensitivity/--no-enable-sensitivity`
+- `--weights \"0.9,0.7,0.5,0.3\"`
+- `--vector-dimension-override 8` (debug/testing)
+
+### 5) Performance and cost impact
+
+Enable performance capture to estimate latency, cache churn, and index-footprint impact:
+
+```yaml
+performance:
+  enabled: true
+  warmup:
+    enabled: true
+    iterations: 1
+    strategy: "interleaved"
+  capture:
+    qtime: true
+    client_latency: true
+    percentiles: [50, 95, 99]
+  caches:
+    enabled: true
+    names: ["filterCache", "queryResultCache", "documentCache", "fieldValueCache"]
+  index:
+    enabled: true
+    luke: true
+```
+
+Outputs include `perf_metrics.json`, grouped query classes, cache deltas, index-size deltas, and
+report callouts such as p95 latency regressions.
+
+### 6) Deterministic diagnosis and recommendations
+
+Schema-Lens can convert diff evidence into deterministic root-cause findings and action-oriented
+next steps:
+
+- root causes:
+  - `PREFIX_MATCHING_REMOVED`
+  - `TITLE_BOOST_REDUCED`
+  - `MIN_SHOULD_MATCH_STRICTER`
+  - `ANALYSIS_REMOVED_OR_FIELD_EXACTIFIED`
+  - `VECTOR_DOMINANCE_INCREASED`
+  - `CACHE_OR_LATENCY_REGRESSION`
+  - `FACET_FIELD_BEHAVIOR_CHANGED`
+- recommendations:
+  - dual-field prefix strategy
+  - copyField migration path
+  - smaller boost/mm steps
+  - hybrid weight sweeps
+  - cache/docValues tuning
+
+These are rules-based. There is no LLM dependency.
+
+### 7) Environment compare, monitoring, dashboard, and LTR
+
+- `compare-env` compares two live Solr environments for ranking/perf drift.
+- `monitor` appends snapshot-vs-current drift summaries into `monitor_history.jsonl`.
+- `serve` exposes a read-only FastAPI dashboard over run artifacts.
+- `ltr` awareness detects LTR requests and diffs feature logs when `[features]` is available.
 
 ## End-to-end flow
 
@@ -249,6 +364,34 @@ schema-lens run examples/changesets/procurement-synonym-rewrite.yaml --out out/p
 cat out/procurement_demo/compare.json | rg "SYNONYM_EXPANSION_CHANGED|REWRITE_CLAUSE_SPIKE"
 ```
 
+## Quickstart (vector and hybrid simulation)
+
+1. Start SolrCloud:
+
+```bash
+make dev-up
+```
+
+2. Prepare vector collection/configset and ingest embeddings:
+
+```bash
+make demo-setup-vector
+```
+
+3. Run vector/hybrid scenario pack:
+
+```bash
+schema-lens run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
+```
+
+4. Inspect vector outputs:
+
+```bash
+cat out/vector_demo/compare.json | rg "vector_hybrid|hybrid_sensitivity|dominance"
+cat out/vector_demo/hybrid_sensitivity.json
+open out/vector_demo/report.html
+```
+
 ## CLI reference
 
 ### Primary commands
@@ -256,7 +399,7 @@ cat out/procurement_demo/compare.json | rg "SYNONYM_EXPANSION_CHANGED|REWRITE_CL
 - `schema-lens validate <changeset.yaml>`
 - `schema-lens inspect --solr-url URL --collection NAME --out PATH`
 - `schema-lens snapshot --solr-url URL --collection NAME --out DIR`
-- `schema-lens run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup]`
+- `schema-lens run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup] [--scenario NAME ...] [--enable-sensitivity/--no-enable-sensitivity] [--weights CSV] [--vector-dimension-override INT]`
 - `schema-lens replay --baseline-solr-url ... --baseline-collection ... --shadow-solr-url ... --shadow-collection ... --queries ... --k ... --out ...`
 - `schema-lens compare --replay PATH --k K --out PATH`
 - `schema-lens report --compare PATH --manifest PATH --out DIR`
@@ -278,15 +421,24 @@ cat out/procurement_demo/compare.json | rg "SYNONYM_EXPANSION_CHANGED|REWRITE_CL
 - `schema-lens gate --compare compare.json --policy policy.yaml`
 - `schema-lens ci summarize --compare compare.json --out summary.md [--policy policy.yaml]`
 
+### Analysis and operations helpers
+
+- `schema-lens recommend --run out/run_xxx --out out/recommendations.json`
+- `schema-lens compare-env --env1 examples/envs/prod_us.yaml --env2 examples/envs/prod_eu.yaml --queries examples/queries/env_compare_queries.jsonl --out out/env_compare`
+- `schema-lens serve --run out/demo --port 8080`
+- `schema-lens serve --compare out/env_compare/compare.json --port 8080`
+- `schema-lens monitor --baseline-snapshot out/demo --queries examples/queries/env_compare_queries.jsonl --out out/monitor`
+
 ## Changeset reference
 
 See [docs/changeset-spec.md](docs/changeset-spec.md).
 
-Notable v0.1.3 additions:
+Notable v0.2.0 additions:
 
 - `schema.synonym.update`
 - `schema.stopwords.update`
 - `evaluation.rewrite_diff`
+- `vector` scenarios + `evaluation.vector_hybrid`
 - optional `shadow.baseline_configset_dir` for local configset source when patching.
 
 ## Output artifacts
@@ -305,11 +457,21 @@ A full `run` emits a reproducible bundle under `--out`:
 - `docs_sample.jsonl` (when Solr doc sampling enabled)
 - `queries_extracted.jsonl` (when log extraction enabled)
 - `replay.json`
+- `replay_<scenario>.json` (when vector scenarios enabled)
 - `compare.json`
+- `vector_validation.json` (when vector enabled)
+- `hybrid_sensitivity.json` (when enabled)
+- `perf_metrics.json` (when performance enabled)
+- `rootcauses.json`
+- `recommendations.json`
+- `env_compare.json` (for `compare-env`)
+- `ltr_impact.json`
+- `latest_monitor.json` / `monitor_history.jsonl` (for `monitor`)
 - `report.json`
 - `report.html`
 
-`compare.json` and reports include rewrite impact payload when enabled.
+`compare.json` and reports include additive sections for rewrite impact, vector/hybrid simulation,
+performance, root-cause analysis, recommendations, environment drift, and LTR when available.
 
 ## Quality gate and CI usage
 
@@ -336,6 +498,11 @@ GitHub Actions workflows included:
 - `.github/workflows/ci.yml` (lint + unit + relevance summary job)
 - `.github/workflows/smoke-matrix.yml` (manual matrix run)
 
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for the package map, stage flow, artifact model,
+and extension rules for new tracks.
+
 ## Testing
 
 Fast checks:
@@ -349,6 +516,29 @@ Full local smoke matrix:
 
 ```bash
 make smoke-matrix
+```
+
+Vector-focused smoke:
+
+```bash
+make smoke-vector
+```
+
+Performance example:
+
+```bash
+.venv/bin/schema-lens run examples/changesets/perf_estimator_example.yaml --out out/perf_demo
+.venv/bin/schema-lens gate --compare out/perf_demo/compare.json --policy examples/policy/perf_gate_default.yaml
+```
+
+Environment compare example:
+
+```bash
+.venv/bin/schema-lens compare-env \
+  --env1 examples/envs/prod_us.yaml \
+  --env2 examples/envs/prod_eu.yaml \
+  --queries examples/queries/env_compare_queries.jsonl \
+  --out out/env_compare
 ```
 
 Integration-marked tests:
@@ -371,9 +561,13 @@ RUN_SCHEMA_LENS_SMOKE=1 .venv/bin/pytest -q -m integration
   - use `debug_mode: results` if your Solr setup suppresses `debugQuery=true` fields.
 - Query replay errors (`400`):
   - logs may contain unsupported params/fields in the target collection.
+- `schema-lens serve` fails with FastAPI import errors:
+  - install current dependencies again with `pip install -e ".[dev]"` so the dashboard extras are present.
 
 ## Safety notes
 
 - Tooling is non-AI and deterministic for all scoring/diff metrics.
+- Vector lexical-vs-vector contribution values are explicitly heuristic estimates unless
+  decomposed Solr score components are available.
 - Cleanup is configurable; with cleanup disabled, shadow artifacts remain for manual inspection.
 - Reproducibility depends on stable input snapshots and representative docs/queries.

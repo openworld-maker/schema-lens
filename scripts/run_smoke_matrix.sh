@@ -11,6 +11,7 @@ SCENARIOS=(
   "examples/changesets/fieldtype-change.yaml schema_ops"
   "examples/changesets/prod_realism_example.yaml prod_realism"
   "examples/changesets/procurement-synonym-rewrite.yaml procurement_rewrite"
+  "examples/changesets/vector-hybrid-demo.yaml vector_hybrid"
 )
 
 for item in "${SCENARIOS[@]}"; do
@@ -21,6 +22,9 @@ for item in "${SCENARIOS[@]}"; do
   echo "== Running scenario: $name ($changeset)"
   if [[ "$name" == "procurement_rewrite" ]]; then
     make demo-setup-procurement
+  fi
+  if [[ "$name" == "vector_hybrid" ]]; then
+    make demo-setup-vector
   fi
   .venv/bin/schema-lens validate "$changeset" --no-check-solr
   .venv/bin/schema-lens run "$changeset" --out "$out_dir"

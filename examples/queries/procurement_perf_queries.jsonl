@@ -1,0 +1,4 @@
+{"name":"fasteners head","params":{"q":"bolts","defType":"edismax","qf":"title^3 text","fl":"id,score","rows":"10"}}
+{"name":"filter heavy","params":{"q":"gloves","fq":["category:safety"],"defType":"edismax","fl":"id,score","rows":"10"}}
+{"name":"facet heavy","params":{"q":"nitrile","defType":"edismax","fl":"id,score","rows":"10","facet":"true","facet.field":"category"}}
+{"name":"sort heavy","params":{"q":"bearings","defType":"edismax","sort":"price asc","fl":"id,score","rows":"10"}}

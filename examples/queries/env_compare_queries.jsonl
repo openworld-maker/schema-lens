@@ -1,0 +1,3 @@
+{"params":{"q":"bolts","defType":"edismax","fl":"id,score","rows":"10"}}
+{"params":{"q":"nitrile gloves","defType":"edismax","fq":["category:safety"],"fl":"id,score","rows":"10"}}
+{"params":{"q":"safety eyewear anti fog","defType":"edismax","fl":"id,score","rows":"10"}}

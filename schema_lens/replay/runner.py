@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from schema_lens.compare.facets import parse_facet_fields
+from schema_lens.perf.timer import timed_call
 from schema_lens.queries.model import QueryCase
 from schema_lens.replay.result_model import QueryDoc, QueryResult
 from schema_lens.solr.query_api import select
@@ -37,7 +38,8 @@ def _build_params(
     if isinstance(extra_params, dict):
         merged.update(extra_params)
 
-    merged.update(query_case.params)
+    if isinstance(query_case.params, dict):
+        merged.update(query_case.params)
     merged["rows"] = str(k)
     merged["wt"] = "json"
     merged["fl"] = _normalize_fl(str(merged.get("fl", "id,score")))
@@ -107,9 +109,15 @@ def run_replay(
         params = _build_params(case, request_defaults, k, capture_cfg)
 
         try:
-            base_resp = select(baseline_client, baseline_collection, params)
+            base_resp, base_elapsed = timed_call(
+                select,
+                baseline_client,
+                baseline_collection,
+                params,
+            )
             baseline_result.docs = _extract_docs(base_resp)
             baseline_result.raw_response_meta = _extract_meta(base_resp)
+            baseline_result.raw_response_meta["client_latency_ms"] = base_elapsed
             baseline_result.facet_counts = _extract_facet_counts(base_resp)
         except Exception as exc:  # noqa: BLE001
             baseline_result.error = str(exc)
@@ -117,9 +125,15 @@ def run_replay(
             LOGGER.warning("Baseline query failed for query_id=%s: %s", case.id, exc)
 
         try:
-            shadow_resp = select(shadow_client, shadow_collection, params)
+            shadow_resp, shadow_elapsed = timed_call(
+                select,
+                shadow_client,
+                shadow_collection,
+                params,
+            )
             shadow_result.docs = _extract_docs(shadow_resp)
             shadow_result.raw_response_meta = _extract_meta(shadow_resp)
+            shadow_result.raw_response_meta["client_latency_ms"] = shadow_elapsed
             shadow_result.facet_counts = _extract_facet_counts(shadow_resp)
         except Exception as exc:  # noqa: BLE001
             shadow_result.error = str(exc)

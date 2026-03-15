@@ -10,6 +10,12 @@ from schema_lens.changesets.model import Changeset
 from schema_lens.changesets.operations import SUPPORTED_OPS
 
 CONFIGSET_UPDATE_MODES = {"replace", "patch_append", "patch_merge"}
+VECTOR_SCENARIO_MODES = {"lexical_only", "vector_only", "hybrid"}
+VECTOR_SIMILARITIES = {"cosine", "dot", "euclidean"}
+VECTOR_QUERY_VECTOR_POLICIES = {"skip", "fail"}
+VECTOR_BLEND_METHODS = {"linear", "normalize_linear", "rrf"}
+VECTOR_BLEND_EXECUTION = {"auto", "client", "solr_native"}
+VECTOR_NORMALIZE = {"none", "minmax", "zscore"}
 
 
 @dataclass
@@ -130,6 +136,31 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
             if field_val is not None and not isinstance(field_val, bool):
                 report.errors.append(f"replay.capture.{field_name} must be boolean")
 
+    performance = raw.get("performance")
+    if performance is not None and not isinstance(performance, dict):
+        report.errors.append("performance must be an object")
+        performance = {}
+    if isinstance(performance, dict):
+        enabled = performance.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("performance.enabled must be boolean")
+        warmup = performance.get("warmup")
+        if warmup is not None and not isinstance(warmup, dict):
+            report.errors.append("performance.warmup must be an object")
+        capture = performance.get("capture")
+        if capture is not None and not isinstance(capture, dict):
+            report.errors.append("performance.capture must be an object")
+        if isinstance(capture, dict):
+            percentiles = capture.get("percentiles")
+            if percentiles is not None:
+                if not isinstance(percentiles, list) or not all(
+                    isinstance(item, int) for item in percentiles
+                ):
+                    report.errors.append("performance.capture.percentiles must be a list of ints")
+        caches = performance.get("caches")
+        if caches is not None and not isinstance(caches, dict):
+            report.errors.append("performance.caches must be an object")
+
     rewrite_diff = _get_in(raw, "evaluation.rewrite_diff")
     if rewrite_diff is not None and not isinstance(rewrite_diff, dict):
         report.errors.append("evaluation.rewrite_diff must be an object")
@@ -153,6 +184,159 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         always_for_high_risk = rewrite_diff.get("always_for_high_risk")
         if always_for_high_risk is not None and not isinstance(always_for_high_risk, bool):
             report.errors.append("evaluation.rewrite_diff.always_for_high_risk must be boolean")
+
+    vector_cfg = raw.get("vector")
+    if vector_cfg is not None and not isinstance(vector_cfg, dict):
+        report.errors.append("vector must be an object")
+        vector_cfg = {}
+    if isinstance(vector_cfg, dict):
+        enabled = vector_cfg.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("vector.enabled must be boolean")
+
+        if vector_cfg.get("enabled"):
+            field = vector_cfg.get("field")
+            if not isinstance(field, str) or not field.strip():
+                report.errors.append("vector.field is required when vector.enabled=true")
+
+            dimension = vector_cfg.get("dimension")
+            if dimension is not None:
+                try:
+                    if int(dimension) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    report.errors.append("vector.dimension must be an integer > 0")
+
+            similarity = vector_cfg.get("similarity")
+            if similarity is not None and similarity not in VECTOR_SIMILARITIES:
+                report.errors.append(
+                    f"vector.similarity must be one of {sorted(VECTOR_SIMILARITIES)}"
+                )
+
+            qv_policy = vector_cfg.get("query_vector_policy")
+            if qv_policy is not None and qv_policy not in VECTOR_QUERY_VECTOR_POLICIES:
+                report.errors.append(
+                    "vector.query_vector_policy must be one of ['fail', 'skip']"
+                )
+
+            embedding_source = vector_cfg.get("embedding_source", {})
+            if embedding_source is not None and not isinstance(embedding_source, dict):
+                report.errors.append("vector.embedding_source must be an object")
+                embedding_source = {}
+            if isinstance(embedding_source, dict):
+                source_type = str(embedding_source.get("type", "none"))
+                if source_type not in {"file", "none"}:
+                    report.errors.append("vector.embedding_source.type must be 'file' or 'none'")
+                if source_type == "file":
+                    if (
+                        not isinstance(embedding_source.get("path"), str)
+                        or not embedding_source.get("path")
+                    ):
+                        report.errors.append(
+                            "vector.embedding_source.path is required when type=file"
+                        )
+
+            scenarios = vector_cfg.get("scenarios")
+            if not isinstance(scenarios, list) or not scenarios:
+                report.errors.append("vector.scenarios must be a non-empty list when enabled")
+            else:
+                seen_names: set[str] = set()
+                for idx, scenario in enumerate(scenarios):
+                    loc = f"vector.scenarios[{idx}]"
+                    if not isinstance(scenario, dict):
+                        report.errors.append(f"{loc} must be an object")
+                        continue
+                    name = scenario.get("name")
+                    if not isinstance(name, str) or not name.strip():
+                        report.errors.append(f"{loc}.name is required")
+                    elif name in seen_names:
+                        report.errors.append(f"{loc}.name must be unique (duplicate: {name})")
+                    else:
+                        seen_names.add(name)
+
+                    mode = scenario.get("mode")
+                    if mode not in VECTOR_SCENARIO_MODES:
+                        report.errors.append(
+                            f"{loc}.mode must be one of {sorted(VECTOR_SCENARIO_MODES)}"
+                        )
+                        continue
+
+                    if mode in {"vector_only", "hybrid"}:
+                        knn = scenario.get("knn")
+                        if not isinstance(knn, dict):
+                            report.errors.append(f"{loc}.knn must be an object")
+                        else:
+                            for key in ("k", "topK"):
+                                value = knn.get(key)
+                                if value is not None:
+                                    try:
+                                        if int(value) <= 0:
+                                            raise ValueError
+                                    except (TypeError, ValueError):
+                                        report.errors.append(f"{loc}.knn.{key} must be integer > 0")
+                    if mode == "hybrid":
+                        blend = scenario.get("blend")
+                        if not isinstance(blend, dict):
+                            report.errors.append(f"{loc}.blend must be an object")
+                        else:
+                            method = blend.get("method")
+                            if method is not None and method not in VECTOR_BLEND_METHODS:
+                                report.errors.append(
+                                    f"{loc}.blend.method must be one of "
+                                    f"{sorted(VECTOR_BLEND_METHODS)}"
+                                )
+                            execution = blend.get("execution")
+                            if execution is not None and execution not in VECTOR_BLEND_EXECUTION:
+                                report.errors.append(
+                                    f"{loc}.blend.execution must be one of "
+                                    f"{sorted(VECTOR_BLEND_EXECUTION)}"
+                                )
+                            normalize = blend.get("normalize")
+                            if normalize is not None and normalize not in VECTOR_NORMALIZE:
+                                report.errors.append(
+                                    f"{loc}.blend.normalize must be one of "
+                                    f"{sorted(VECTOR_NORMALIZE)}"
+                                )
+
+    vector_eval = _get_in(raw, "evaluation.vector_hybrid")
+    if vector_eval is not None and not isinstance(vector_eval, dict):
+        report.errors.append("evaluation.vector_hybrid must be an object")
+        vector_eval = {}
+    if isinstance(vector_eval, dict):
+        enabled = vector_eval.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("evaluation.vector_hybrid.enabled must be boolean")
+        for key in ("topK", "candidate_pool"):
+            value = vector_eval.get(key)
+            if value is not None:
+                try:
+                    if int(value) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    report.errors.append(f"evaluation.vector_hybrid.{key} must be integer > 0")
+
+        sensitivity = vector_eval.get("sensitivity")
+        if sensitivity is not None and not isinstance(sensitivity, dict):
+            report.errors.append("evaluation.vector_hybrid.sensitivity must be an object")
+        if isinstance(sensitivity, dict):
+            enabled = sensitivity.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                report.errors.append("evaluation.vector_hybrid.sensitivity.enabled must be boolean")
+            weights = sensitivity.get("weights")
+            if weights is not None:
+                if not isinstance(weights, list) or not weights:
+                    report.errors.append(
+                        "evaluation.vector_hybrid.sensitivity.weights must be a non-empty list"
+                    )
+                else:
+                    for idx, value in enumerate(weights):
+                        try:
+                            float(value)
+                        except (TypeError, ValueError):
+                            report.errors.append(
+                                "evaluation.vector_hybrid.sensitivity.weights"
+                                f"[{idx}] must be numeric"
+                            )
 
     changes = raw.get("changes", [])
     if not isinstance(changes, list):
@@ -250,6 +434,13 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         path_entries = [("queries.source.path", queries_path)]
         if docs_path is not None:
             path_entries.append(("data.docs_source.path", docs_path))
+        vector_embedding_path = _get_in(raw, "vector.embedding_source.path")
+        vector_embedding_type = _get_in(raw, "vector.embedding_source.type")
+        if (
+            isinstance(vector_embedding_path, str)
+            and str(vector_embedding_type or "none") == "file"
+        ):
+            path_entries.append(("vector.embedding_source.path", vector_embedding_path))
         for label, p in path_entries:
             if isinstance(p, str):
                 fp = _resolve_input_path(changeset.path, p)

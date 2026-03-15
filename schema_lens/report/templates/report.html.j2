@@ -59,6 +59,56 @@
       <p class="muted">Git Commit: {{ report.run_manifest.settings.git_commit if report.run_manifest.settings else "n/a" }}</p>
     </div>
 
+    <div class="card" id="performance-cost-impact">
+      <h2>Performance &amp; Cost Impact</h2>
+      {% set perf = report.performance_cost_impact or {} %}
+      {% if perf.enabled %}
+      <pre>{{ perf }}</pre>
+      {% else %}
+      <p class="muted">{{ perf.reason if perf.reason else "Performance capture not enabled." }}</p>
+      {% endif %}
+    </div>
+
+    <div class="card" id="root-cause-analysis">
+      <h2>Root Cause Analysis</h2>
+      {% set causes = report.root_causes or {} %}
+      {% if causes.enabled %}
+      <ul>
+        {% for line in causes.summaries or [] %}
+        <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+      <pre>{{ causes }}</pre>
+      {% else %}
+      <p class="muted">{{ causes.reason if causes.reason else "Root-cause analysis not available." }}</p>
+      {% endif %}
+    </div>
+
+    <div class="card" id="recommendations">
+      <h2>Recommendations</h2>
+      {% set recs = report.recommendations or {} %}
+      {% if recs.enabled %}
+      <ul>
+        {% for line in recs.summaries or [] %}
+        <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+      <pre>{{ recs }}</pre>
+      {% else %}
+      <p class="muted">{{ recs.reason if recs.reason else "Recommendations not available." }}</p>
+      {% endif %}
+    </div>
+
+    <div class="card" id="environment-drift">
+      <h2>Environment Drift</h2>
+      {% set envc = report.environment_compare or {} %}
+      {% if envc.enabled %}
+      <pre>{{ envc }}</pre>
+      {% else %}
+      <p class="muted">{{ envc.reason if envc.reason else "Environment compare not available." }}</p>
+      {% endif %}
+    </div>
+
     <div class="card">
       <h2>Summary</h2>
       <table>
@@ -187,6 +237,79 @@
       {% endfor %}
       {% else %}
       <p class="muted">Rewrite diff was not enabled for this run.</p>
+      {% endif %}
+    </div>
+
+    <div class="card" id="ltr-impact">
+      <h2>LTR Impact</h2>
+      {% set ltr = report.ltr_impact or {} %}
+      {% if ltr.enabled %}
+      <pre>{{ ltr }}</pre>
+      {% else %}
+      <p class="muted">{{ ltr.reason if ltr.reason else "LTR impact not available." }}</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Vector &amp; Hybrid Simulation</h2>
+      {% set vh = report.vector_hybrid_simulation or {} %}
+      {% if vh.enabled %}
+      <p class="muted">Comparison mode: {{ vh.comparison_mode }} | TopK: {{ vh.topK }}</p>
+      <h3>Scenario Summary</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Mode</th>
+            <th>Avg Overlap Ratio</th>
+            <th>Avg Jaccard</th>
+            <th>Avg Tau</th>
+            <th>Avg QTime</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in vh.scenario_summaries or [] %}
+          <tr>
+            <td>{{ row.scenario_name }}</td>
+            <td>{{ row.mode }}</td>
+            <td>{{ "%.3f"|format(row.avg_overlap_ratio) }}</td>
+            <td>{{ "%.3f"|format(row.avg_jaccard) }}</td>
+            <td>{{ "%.3f"|format(row.avg_kendall_tau) }}</td>
+            <td>{{ "%.2f"|format(row.avg_qtime) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h3>Contribution Estimate</h3>
+      {% for scenario_name, contribution in (vh.hybrid_contribution or {}).items() %}
+      <details>
+        <summary>{{ scenario_name }} | lexical est {{ "%.2f"|format(contribution.summary.avg_contribution_lexical_estimate if contribution.summary else 0.0) }} | vector est {{ "%.2f"|format(contribution.summary.avg_contribution_vector_estimate if contribution.summary else 0.0) }}</summary>
+        <pre>{{ contribution }}</pre>
+      </details>
+      {% endfor %}
+
+      {% if vh.narratives %}
+      <h3>Narrative</h3>
+      <ul>
+        {% for line in vh.narratives %}
+        <li>{{ line }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% set sens = report.hybrid_sensitivity or {} %}
+      {% if sens.enabled %}
+      <h3>Weight Sensitivity</h3>
+      {% for scenario in sens.scenarios or [] %}
+      <details>
+        <summary>{{ scenario.scenario_name }} | top1 flip % {{ "%.2f"|format(scenario.top1_flip_percent) }}</summary>
+        <pre>{{ scenario }}</pre>
+      </details>
+      {% endfor %}
+      {% endif %}
+      {% else %}
+      <p class="muted">Vector/hybrid simulation was not enabled for this run.</p>
       {% endif %}
     </div>
 

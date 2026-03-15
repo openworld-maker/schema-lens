@@ -20,6 +20,7 @@ def build_ci_summary_markdown(
     high_risk_pct = summary.get("high_risk_percent", 0.0)
     avg_numfound_delta = summary.get("avg_numfound_delta", 0.0)
     avg_sort_instability = summary.get("avg_sort_instability_ratio", 0.0)
+    vector_hybrid = compare_data.get("vector_hybrid", {})
 
     gate_verdict = "NOT_EVALUATED"
     gate_detail = ""
@@ -49,10 +50,18 @@ def build_ci_summary_markdown(
         f"- High risk %: **{high_risk_pct:.2f}**",
         f"- Avg numFound delta: **{avg_numfound_delta:.3f}**",
         f"- Avg sort instability ratio: **{avg_sort_instability:.3f}**",
-        "",
-        "## Gate Verdict",
-        f"- **{gate_verdict}**",
     ]
+    if isinstance(vector_hybrid, dict) and vector_hybrid.get("enabled"):
+        scenario_count = len(vector_hybrid.get("scenario_summaries", []))
+        lines.append(f"- Vector/hybrid scenarios: **{scenario_count}**")
+        anchor = vector_hybrid.get("anchor_scenarios", {})
+        if isinstance(anchor, dict):
+            lines.append(
+                "- Anchor scenarios: "
+                f"lexical=`{anchor.get('lexical')}` vector=`{anchor.get('vector')}`"
+            )
+
+    lines.extend(["", "## Gate Verdict", f"- **{gate_verdict}**"])
     if gate_detail:
         lines.extend(["", gate_detail])
 
@@ -79,4 +88,3 @@ def build_ci_summary_markdown(
     if policy_path:
         lines.append(f"- Policy: `{policy_path}`")
     return "\n".join(lines) + "\n"
-
