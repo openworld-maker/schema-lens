@@ -15,6 +15,7 @@ Current version: `v0.2.0`
 - [Advanced features](#advanced-features)
 - [End-to-end flow](#end-to-end-flow)
 - [Requirements](#requirements)
+- [Usage guide](#usage-guide)
 - [Quickstart (basic)](#quickstart-basic)
 - [Quickstart (synonym rewrite impact)](#quickstart-synonym-rewrite-impact)
 - [Quickstart (vector and hybrid simulation)](#quickstart-vector-and-hybrid-simulation)
@@ -308,6 +309,19 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
+## Usage guide
+
+Start with [docs/usage-guide.md](docs/usage-guide.md).
+
+It provides:
+
+- the easiest first-time local workflow
+- a capability map by job-to-be-done
+- command selection guidance
+- example commands for schema, rewrite, vector, perf, env compare, dashboard, and monitoring
+- artifact-reading guidance
+- current validation status for each feature area
+
 ## Quickstart (basic)
 
 1. Start local SolrCloud:
@@ -546,6 +560,33 @@ Integration-marked tests:
 ```bash
 RUN_SCHEMA_LENS_SMOKE=1 .venv/bin/pytest -q -m integration
 ```
+
+### Validation status
+
+End-to-end smoke coverage currently exists for:
+
+- base `run` workflow
+- rewrite diff workflow
+- vector/hybrid workflow
+- smoke-matrix orchestration
+
+These are covered by:
+
+- `tests/integration/test_run_smoke.py`
+- `tests/integration/test_rewrite_diff_smoke.py`
+- `tests/integration/test_vector_hybrid_smoke.py`
+- `tests/integration/test_smoke_matrix.py`
+
+Additional feature tracks are implemented and have unit/CLI coverage, but do not yet all have
+their own dedicated Docker-backed end-to-end tests:
+
+- `compare-env`
+- `serve`
+- `monitor`
+- performance analysis
+- root-cause analysis
+- recommendations
+- LTR analysis
 
 ## Troubleshooting
 
