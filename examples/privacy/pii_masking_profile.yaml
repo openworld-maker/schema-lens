@@ -1,0 +1,11 @@
+privacy:
+  profile: default
+  allowlist:
+    - summary
+    - diffs
+    - top_regressions
+  denylist:
+    - raw_docs
+    - request_headers
+  no_persist_sensitive: false
+  hash_salt: "schema-lens-internal"

@@ -1,0 +1,6 @@
+{
+  "alias": "products_live",
+  "from_collection": "products_v1",
+  "to_collection": "products_v2",
+  "mode": "dry_run"
+}

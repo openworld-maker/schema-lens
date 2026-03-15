@@ -1,0 +1,11 @@
+security:
+  profile: enterprise-safe
+  audit:
+    requested_by: "platform-team@example.com"
+    approval_reference: "CR-12345"
+  baseline_auth:
+    type: bearer
+    token_env: SCHEMA_LENS_SOLR_BEARER_TOKEN
+  shadow_auth:
+    type: bearer
+    token_env: SCHEMA_LENS_SOLR_BEARER_TOKEN

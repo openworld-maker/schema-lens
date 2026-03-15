@@ -27,9 +27,11 @@ headers:
     captured = {}
 
     class DummyClient:
-        def __init__(self, solr_url, headers=None, verbose=False):
+        def __init__(self, solr_url, headers=None, cert=None, verify=True, verbose=False):
             captured["solr_url"] = solr_url
             captured["headers"] = headers or {}
+            captured["cert"] = cert
+            captured["verify"] = verify
 
     monkeypatch.setattr("schema_lens.env_compare.runner.SolrHttpClient", DummyClient)
     _client_for_env(config, verbose=False)

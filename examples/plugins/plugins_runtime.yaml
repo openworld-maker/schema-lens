@@ -1,0 +1,13 @@
+enabled: true
+strict: false
+entry_points: true
+entry_point_group: schema_lens.plugins
+paths:
+  - ./examples/plugins/sample_query_source
+  - ./examples/plugins/sample_gate
+  - ./examples/plugins/sample_report_widget
+enable_plugins:
+  - sample_query_source
+  - sample_gate
+  - sample_report_widget
+disable_plugins: []

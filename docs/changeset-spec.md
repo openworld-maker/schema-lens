@@ -200,6 +200,82 @@ performance:
     luke: true
     segment_info: true
     store_docvalues_heuristics: true
+
+security:
+  profile: "enterprise-safe" # local-dev | enterprise-safe | no-persist-sensitive | redacted-artifacts-only
+  # optional external YAML file merged into this section:
+  # config: "examples/security/basic_auth_env.yaml"
+  baseline_auth:
+    type: "none" # none | basic | bearer | mtls | plugin | kerberos
+    # basic:
+    # username_env: "SCHEMA_LENS_SOLR_USER"
+    # password_env: "SCHEMA_LENS_SOLR_PASSWORD"
+    # bearer:
+    # token_env: "SCHEMA_LENS_SOLR_BEARER_TOKEN"
+    # mtls:
+    # cert_file: "./certs/client.pem"
+    # key_file: "./certs/client.key"
+    # ca_file: "./certs/ca.pem"
+    # plugin/kerberos:
+    # provider: "my_auth_plugin"
+  shadow_auth:
+    type: "none"
+  audit:
+    requested_by: "platform-team@example.com"
+    approval_reference: "CR-12345"
+  extra_sensitive_keys: ["session_id"]
+
+observability:
+  enabled: true
+  prometheus:
+    enabled: true
+  otel:
+    enabled: true
+  webhooks:
+    enabled: false
+    urls:
+      - "http://localhost:9000/schema-lens/events"
+    timeout_seconds: 3.0
+    headers:
+      X-Schema-Lens-Source: "ci"
+
+governance:
+  enabled: true
+  approval:
+    requested_by: "search-platform@example.com"
+    approved_by: "relevance-lead@example.com"
+    ticket_id: "REL-421"
+    change_request_id: "CR-9921"
+  promotion_state: "stage" # dev | stage | prod_candidate | prod_approved
+  policy_bundles:
+    - "examples/governance/prod_promotion_policy.yaml"
+  exceptions:
+    - id: "ex-2026-001"
+      rationale: "Temporary rollout exception"
+      approved_by: "oncall@example.com"
+      expiry: "2026-12-31T23:59:59Z"
+  signing:
+    enabled: true
+    secret_env: "SCHEMA_LENS_GOV_SIGNING_KEY"
+
+segments:
+  enabled: true
+  keys: ["tenant", "region", "locale", "catalog"]
+  policy:
+    rules:
+      - segment_key: "tenant"
+        segment_value: "acme"
+        metric: "high_risk_percent"
+        op: ">"
+        value: 10
+        severity: "fail"
+
+privacy:
+  profile: "default" # off | default | export-safe
+  allowlist: ["summary", "diffs", "top_regressions"]
+  denylist: ["raw_docs", "request_headers"]
+  no_persist_sensitive: false
+  hash_salt: "schema-lens-internal"
 ```
 
 ## Required fields
@@ -211,6 +287,11 @@ performance:
 - `queries.source.path`
 - `vector.scenarios` when `vector.enabled=true`
 - `performance.capture.percentiles` must be a list of integers when present
+- `security.profile` must be one of:
+  - `local-dev`
+  - `enterprise-safe`
+  - `no-persist-sensitive`
+  - `redacted-artifacts-only`
 
 ## Supported operations
 
@@ -252,6 +333,23 @@ performance:
 - `evaluation.vector_hybrid` configures topK/candidate pool and optional sensitivity sweep.
 - `performance.enabled=true` captures client latency, Solr `QTime`, cache deltas, and Luke-based
   index size heuristics into `perf_metrics.json`.
+- `security.profile` controls artifact redaction and persistence of sampled docs/queries.
+- `security.baseline_auth` and `security.shadow_auth` configure per-target auth material.
+- Auth secrets can be provided inline or via `_env` / `_file` references.
+- `audit.json` records requestor, approval reference, target cluster, and auth mode only.
+- `observability.enabled=true` emits runtime events and webhook deliveries.
+- `observability.prometheus.enabled=true` writes `prometheus_metrics.prom`.
+- `observability.otel.enabled=true` records stage spans in `otel_spans.json`.
+- `observability.webhooks.enabled=true` posts `run_started`, `run_completed`, and `drift_detected`
+  events to configured URLs.
+- `governance.enabled=true` requires at least `governance.approval.requested_by`.
+- `governance.policy_bundles` supports reusable gate policy packs merged into a single bundle view.
+- `governance.signing.enabled=true` records a deterministic `manifest_hash` and HMAC signature in
+  run governance metadata.
+- `segments.enabled=true` computes per-segment summaries into `segments.json`.
+- Query JSONL can carry segment metadata in `segment`, or top-level keys like `tenant`/`region`.
+- `privacy.profile=default|export-safe` enables deterministic masking and redaction on artifacts.
+- `privacy.no_persist_sensitive=true` prunes sensitive raw artifacts after run completion.
 - Performance gate rules can evaluate:
   - `p95_latency_regression_pct`
   - `p95_qtime_regression_pct`

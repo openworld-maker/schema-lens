@@ -1,0 +1,47 @@
+name: release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build deps
+        run: python -m pip install --upgrade pip build
+
+      - name: Build package artifacts
+        run: python -m build
+
+      - name: Generate checksums
+        run: shasum -a 256 dist/* > dist/SHA256SUMS.txt
+
+      - name: Build Docker image (smoke)
+        run: docker build -f docker/Dockerfile -t schema-lens:release .
+
+      - name: Helm template smoke
+        run: |
+          if command -v helm >/dev/null 2>&1; then
+            helm template schema-lens ./helm/schema-lens > /tmp/schema-lens-helm.yaml
+          else
+            echo "helm not installed on runner image; skipping"
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: schema-lens-release
+          path: |
+            dist/*

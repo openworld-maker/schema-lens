@@ -19,6 +19,7 @@ class QueryCase:
     query_vector: list[float] | None = None
     request_mode: str = "params"
     skip_reasons: list[str] = field(default_factory=list)
+    segment: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -118,6 +118,7 @@ def compare_replay(replay_data: dict[str, Any], k: int) -> dict[str, Any]:
                 "query_id": query.get("id"),
                 "raw_line": query.get("raw_line"),
                 "params": query.get("params", {}) if isinstance(query.get("params"), dict) else {},
+                "segment": query.get("segment", {}) if isinstance(query.get("segment"), dict) else {},
                 "baseline_topk_ids": base_ids,
                 "shadow_topk_ids": shadow_ids,
                 "topk_overlap_count": overlap,

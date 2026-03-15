@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover - exercised only when optional dep is mi
 else:
     FASTAPI_AVAILABLE = True
 
-from schema_lens.dashboard.loader import load_run_artifacts
+from schema_lens.dashboard.loader import load_run_artifacts, load_run_artifacts_from_api
 
 
 def _render_overview(artifacts: dict[str, object]) -> str:
@@ -43,23 +43,43 @@ def _render_overview(artifacts: dict[str, object]) -> str:
     """
 
 
-def create_dashboard_app(base_path: Path) -> FastAPI:
+def create_dashboard_app(
+    base_path: Path | None = None,
+    *,
+    api_base_url: str | None = None,
+    run_id: str | None = None,
+) -> FastAPI:
     if not FASTAPI_AVAILABLE:
         raise RuntimeError("FastAPI is required for `schema-lens serve`. Install dashboard deps.")
+    if base_path is None and not (api_base_url and run_id):
+        raise ValueError("Provide either base_path or api_base_url+run_id")
     app = FastAPI(title="schema-lens dashboard")
+
+    def _load() -> dict[str, object]:
+        if api_base_url and run_id:
+            return load_run_artifacts_from_api(api_base_url, run_id)
+        assert base_path is not None
+        return load_run_artifacts(base_path)
 
     @app.get("/", response_class=HTMLResponse)
     def overview() -> str:
-        artifacts = load_run_artifacts(base_path)
+        artifacts = _load()
         return _render_overview(artifacts)
 
     @app.get("/api/overview", response_class=JSONResponse)
     def api_overview() -> dict[str, object]:
-        return load_run_artifacts(base_path)
+        return _load()
 
     @app.get("/api/query-explorer", response_class=JSONResponse)
     def api_query_explorer() -> dict[str, object]:
-        artifacts = load_run_artifacts(base_path)
+        artifacts = _load()
+        if artifacts.get("source") == "api":
+            explorer = artifacts.get("query_explorer", {})
+            if isinstance(explorer, dict):
+                return {
+                    "top_regressions": explorer.get("top_regressions", []),
+                    "diffs": explorer.get("diffs", []),
+                }
         compare = artifacts.get("compare.json", {})
         return {
             "top_regressions": (

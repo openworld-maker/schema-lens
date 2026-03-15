@@ -11,6 +11,7 @@ class EnvironmentConfig:
     name: str
     solr_url: str
     collection: str
+    source_path: str | None = None
     request_defaults: dict[str, Any] = field(default_factory=dict)
     auth: dict[str, Any] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)

@@ -1,0 +1,11 @@
+privacy:
+  profile: export-safe
+  allowlist:
+    - summary
+    - top_regressions
+    - governance
+    - compatibility
+  denylist:
+    - per_query_diffs
+  no_persist_sensitive: true
+  hash_salt: "export-safe-salt"

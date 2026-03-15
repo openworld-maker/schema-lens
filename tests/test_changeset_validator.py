@@ -278,3 +278,219 @@ def test_validator_rejects_invalid_vector_sections(tmp_path):
     assert any("vector.similarity" in err for err in report.errors)
     assert any("vector.query_vector_policy" in err for err in report.errors)
     assert any("evaluation.vector_hybrid.topK" in err for err in report.errors)
+
+
+def test_validator_accepts_security_profiles_and_auth(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "security": {
+            "profile": "enterprise-safe",
+            "baseline_auth": {"type": "basic", "username": "u", "password": "p"},
+            "shadow_auth": {"type": "bearer", "token_env": "TEST_TOKEN"},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_security_auth():
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+        "security": {
+            "profile": "bad-profile",
+            "baseline_auth": {"type": "unknown"},
+            "shadow_auth": {"type": "plugin"},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=False)
+    assert not report.ok
+    assert any("security.profile" in err for err in report.errors)
+    assert any("security.baseline_auth.type" in err for err in report.errors)
+    assert any("requires provider plugin name" in err for err in report.errors)
+
+
+def test_validator_accepts_observability_sections(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "observability": {
+            "enabled": True,
+            "prometheus": {"enabled": True},
+            "otel": {"enabled": True},
+            "webhooks": {"enabled": True, "urls": ["http://localhost:9000/events"]},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_observability_sections():
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+        "observability": {
+            "enabled": "yes",
+            "prometheus": "bad",
+            "webhooks": {"enabled": "true", "urls": "http://x"},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=False)
+    assert not report.ok
+    assert any("observability.enabled" in err for err in report.errors)
+    assert any("observability.prometheus" in err for err in report.errors)
+    assert any("observability.webhooks.urls" in err for err in report.errors)
+
+
+def test_validator_accepts_governance_sections(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+
+    bundle = tmp_path / "bundle.yaml"
+    bundle.write_text("fail: []\nwarn: []\n", encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "governance": {
+            "enabled": True,
+            "approval": {"requested_by": "alice", "ticket_id": "ABC-1"},
+            "promotion_state": "stage",
+            "exceptions": [
+                {
+                    "id": "ex1",
+                    "rationale": "known issue",
+                    "expiry": "2099-01-01T00:00:00Z",
+                }
+            ],
+            "policy_bundles": [str(bundle)],
+            "signing": {"enabled": True, "secret": "secret"},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_governance_sections():
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+        "governance": {
+            "enabled": True,
+            "approval": {},
+            "promotion_state": "bad",
+            "policy_bundles": "x",
+            "signing": {"enabled": True},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=False)
+    assert not report.ok
+    assert any("governance.approval.requested_by" in err for err in report.errors)
+    assert any("governance.promotion_state" in err for err in report.errors)
+    assert any("governance.policy_bundles" in err for err in report.errors)
+
+
+def test_validator_accepts_segments_config(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.jsonl"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text('{"params":{"q":"foo"},"segment":{"tenant":"t1"}}\n', encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries), "format": "jsonl"}},
+        "changes": [],
+        "segments": {
+            "enabled": True,
+            "keys": ["tenant", "region"],
+            "policy": {"rules": []},
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_segments_config():
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+        "segments": {
+            "enabled": "yes",
+            "keys": "tenant",
+            "policy": "bad",
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=False)
+    assert not report.ok
+    assert any("segments.enabled" in err for err in report.errors)
+    assert any("segments.keys" in err for err in report.errors)
+    assert any("segments.policy" in err for err in report.errors)
+
+
+def test_validator_accepts_privacy_config(tmp_path):
+    docs = tmp_path / "docs.jsonl"
+    queries = tmp_path / "queries.txt"
+    docs.write_text('{"id":"1"}\n', encoding="utf-8")
+    queries.write_text("q=foo\n", encoding="utf-8")
+
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"type": "file", "path": str(docs)}},
+        "queries": {"source": {"type": "file", "path": str(queries)}},
+        "changes": [],
+        "privacy": {
+            "profile": "export-safe",
+            "allowlist": ["summary"],
+            "denylist": ["raw_docs"],
+            "no_persist_sensitive": True,
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=True)
+    assert report.ok
+
+
+def test_validator_rejects_invalid_privacy_config():
+    data = {
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+        "privacy": {
+            "profile": "bad",
+            "allowlist": "x",
+            "no_persist_sensitive": "yes",
+        },
+    }
+    report = validate_changeset(Changeset(raw=data), check_paths=False)
+    assert not report.ok
+    assert any("privacy.profile" in err for err in report.errors)
+    assert any("privacy.allowlist" in err for err in report.errors)
+    assert any("privacy.no_persist_sensitive" in err for err in report.errors)

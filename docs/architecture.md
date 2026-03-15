@@ -36,9 +36,10 @@ queries extract/load -> replay -> compare
         +--> root-cause analysis
         +--> recommendations
         +--> LTR impact
+        +--> optional plugin execution
         |
         v
-report.json + report.html + run_manifest.json
+report.json + report.html + run_manifest.json + plugins.json
 ```
 
 ## Main Packages
@@ -48,9 +49,11 @@ report.json + report.html + run_manifest.json
 - `schema_lens/cli.py`
 - `schema_lens/config.py`
 - `schema_lens/errors.py`
+- `schema_lens/api/`
 
 `cli.py` owns stage ordering, artifact paths, and run manifest updates. Feature packages expose
-small assembler functions so orchestration stays thin.
+small assembler functions so orchestration stays thin. `api/` exposes service-mode wrappers over
+the same core workflow with queued run execution and artifact serving.
 
 ### Solr transport and APIs
 
@@ -77,10 +80,12 @@ build schema dependency graphs, and capture deterministic baseline snapshots.
 - `schema_lens/replay/`
 - `schema_lens/compare/`
 - `schema_lens/vector/`
+- `schema_lens/compat/`
 
 `replay` executes lexical baseline/shadow requests. `vector` adds scenario-based replay and
 client-side hybrid simulation. `compare` computes ranking, facet, filter, sort, rewrite, explain,
-gate, and report-ready summaries.
+gate, and report-ready summaries. `compat` detects Solr version and exposes capability adapters so
+optional features degrade cleanly across Solr 8/9/10.
 
 ### Analysis tracks
 
@@ -90,6 +95,13 @@ gate, and report-ready summaries.
 - `schema_lens/ltr/`
 - `schema_lens/env_compare/`
 - `schema_lens/monitor/`
+- `schema_lens/plugins/`
+- `schema_lens/security/`
+- `schema_lens/observability/`
+- `schema_lens/governance/`
+- `schema_lens/rollout/`
+- `schema_lens/segments/`
+- `schema_lens/privacy/`
 
 These packages are optional, additive tracks:
 
@@ -99,6 +111,13 @@ These packages are optional, additive tracks:
 - `ltr`: feature-log aware rerank drift
 - `env_compare`: cross-cluster drift
 - `monitor`: snapshot-vs-current drift history
+- `plugins`: optional extension SDK (contracts, registry, loader, compatibility checks)
+- `security`: auth resolution, secret loading, redaction, audit trail, execution profiles
+- `observability`: run events, webhook sinks, Prometheus text export, OTel-style stage spans
+- `governance`: approvals, policy bundles, exceptions, promotion state, optional manifest signing
+- `rollout`: GitOps drift checks, canary plan generation, alias swap/rollback plans, post-cutover verification
+- `segments`: multi-tenant/segment aggregation and segment-level policy checks
+- `privacy`: PII masking, export-safe transformations, retention pruning
 
 ### Presentation
 
@@ -109,12 +128,23 @@ These packages are optional, additive tracks:
 `report` builds JSON and HTML bundles. `dashboard` serves a read-only local UI over artifacts on
 disk. `ci` formats PR-friendly markdown summaries.
 
+### Packaging and deployment
+
+- `docker/`
+- `helm/schema-lens/`
+- `scripts/release/`
+- `.github/workflows/release.yml`
+
+These assets support enterprise deployment paths (containerized CLI/API mode, Helm-managed service
+deployment, and release artifact generation).
+
 ## Artifact Model
 
 Core run artifacts:
 
 - `run_manifest.json`
 - `snapshot*.json`
+- `compat.json`
 - `schema_risk.json`
 - `shadow.json`
 - `replay.json`
@@ -133,6 +163,15 @@ Optional additive artifacts:
 - `recommendations.json`
 - `env_compare.json`
 - `ltr_impact.json`
+- `plugins.json`
+- `audit.json`
+- `governance.json`
+- `observability_events.jsonl`
+- `otel_spans.json`
+- `webhook_deliveries.json`
+- `prometheus_metrics.prom`
+- `segments.json`
+- `privacy.json`
 - `latest_monitor.json`
 - `monitor_history.jsonl`
 
@@ -143,6 +182,17 @@ Missing optional capabilities must serialize as:
 ```
 
 This keeps downstream report/dashboard code stable.
+
+## Plugin Boundaries
+
+Plugin runtime is intentionally narrow:
+
+1. Discovery: entry points and local plugin paths
+2. Contract check: metadata and version compatibility
+3. Lifecycle: `validate -> initialize -> execute -> cleanup`
+4. Isolation: plugin failures are recorded in artifacts and only block runs in strict mode
+
+Core replay/compare logic stays in first-party packages; plugins are additive and optional.
 
 ## Backward-Compatibility Rules
 

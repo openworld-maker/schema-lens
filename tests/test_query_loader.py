@@ -73,3 +73,15 @@ def test_load_queries_jsonl_invalid_line(tmp_path: Path):
     query_file.write_text("{bad}\n", encoding="utf-8")
     with pytest.raises(ValidationError, match="Invalid JSONL query"):
         load_queries(query_file, fmt="jsonl")
+
+
+def test_load_queries_jsonl_with_segment_metadata(tmp_path: Path):
+    query_file = tmp_path / "queries_segmented.jsonl"
+    query_file.write_text(
+        '{"params":{"q":"foo"},"segment":{"tenant":"t1","region":"us"}}\n',
+        encoding="utf-8",
+    )
+    cases = load_queries(query_file, fmt="jsonl")
+    assert len(cases) == 1
+    assert cases[0].segment["tenant"] == "t1"
+    assert cases[0].segment["region"] == "us"

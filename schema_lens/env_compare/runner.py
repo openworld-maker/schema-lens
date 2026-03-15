@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,9 @@ from schema_lens.env_compare.models import EnvironmentConfig
 from schema_lens.http.client import SolrHttpClient
 from schema_lens.queries.loader import load_queries
 from schema_lens.replay.runner import run_replay
+from schema_lens.security.auth import resolve_auth_material
+from schema_lens.security.redaction import redact_headers
+from schema_lens.security.redaction import redact_payload
 
 
 def load_env_config(path: Path) -> EnvironmentConfig:
@@ -23,6 +25,7 @@ def load_env_config(path: Path) -> EnvironmentConfig:
         name=str(payload.get("name") or path.stem),
         solr_url=str(payload.get("solr_url")),
         collection=str(payload.get("collection")),
+        source_path=str(path.resolve()),
         request_defaults=payload.get("request_defaults", {})
         if isinstance(payload.get("request_defaults"), dict)
         else {},
@@ -39,14 +42,20 @@ def load_env_config(path: Path) -> EnvironmentConfig:
 
 def _client_for_env(env: EnvironmentConfig, verbose: bool) -> SolrHttpClient:
     headers = dict(env.headers)
-    auth_type = str(env.auth.get("type", "none")).lower()
-    if auth_type == "basic":
-        raw = f"{env.auth.get('username', '')}:{env.auth.get('password', '')}"
-        token = base64.b64encode(raw.encode("utf-8")).decode("ascii")
-        headers["Authorization"] = f"Basic {token}"
-    elif auth_type == "bearer":
-        headers["Authorization"] = f"Bearer {env.auth.get('token', '')}"
-    return SolrHttpClient(env.solr_url, headers=headers, verbose=verbose)
+    base_dir = (
+        Path(env.source_path).parent
+        if isinstance(env.source_path, str) and env.source_path
+        else Path.cwd()
+    )
+    auth = resolve_auth_material(env.auth, base_dir=base_dir)
+    headers.update(auth.headers)
+    return SolrHttpClient(
+        env.solr_url,
+        headers=headers,
+        cert=auth.cert,
+        verify=auth.verify,
+        verbose=verbose,
+    )
 
 
 def compare_environments(
@@ -79,8 +88,15 @@ def compare_environments(
         client1.close()
         client2.close()
 
-    replay["baseline"] = env1.to_dict()
-    replay["shadow"] = env2.to_dict()
-    compare = build_environment_compare(replay, k, env1.to_dict(), env2.to_dict())
+    replay["baseline"] = redact_payload(env1.to_dict())
+    replay["shadow"] = redact_payload(env2.to_dict())
+    replay["baseline"]["headers"] = redact_headers(env1.headers)
+    replay["shadow"]["headers"] = redact_headers(env2.headers)
+    compare = build_environment_compare(
+        replay,
+        k,
+        redact_payload(env1.to_dict()),
+        redact_payload(env2.to_dict()),
+    )
     compare["environment_compare"]["replay_stats"] = replay.get("stats", {})
     return {"replay": replay, "compare": compare}

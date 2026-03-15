@@ -21,11 +21,13 @@ class SolrHttpClient:
         base_url: str,
         timeout: float = 30.0,
         headers: dict[str, str] | None = None,
+        cert: str | tuple[str, str] | None = None,
+        verify: bool | str = True,
         verbose: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/") + "/"
         self.verbose = verbose
-        self.client = httpx.Client(timeout=timeout, headers=headers or {})
+        self.client = httpx.Client(timeout=timeout, headers=headers or {}, cert=cert, verify=verify)
 
     def close(self) -> None:
         self.client.close()

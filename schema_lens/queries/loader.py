@@ -60,6 +60,24 @@ def _query_text_from_json_request(payload: dict[str, Any]) -> str:
     return ""
 
 
+def _segment_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    segment: dict[str, str] = {}
+    if isinstance(payload.get("segment"), dict):
+        for key, value in payload["segment"].items():
+            if isinstance(key, str) and value is not None:
+                segment[key] = str(value)
+    for key in ("tenant", "region", "locale", "catalog"):
+        value = payload.get(key)
+        if value is not None:
+            segment[key] = str(value)
+    labels = payload.get("labels")
+    if isinstance(labels, dict):
+        for key, value in labels.items():
+            if isinstance(key, str) and value is not None:
+                segment[key] = str(value)
+    return segment
+
+
 def parse_simple_line(line: str) -> dict[str, Any]:
     text = line.strip()
     if not text:
@@ -105,6 +123,7 @@ def load_queries(
                 params=params,
                 request_mode="params",
                 skip_reasons=[],
+                segment={},
             )
             cases.append(case)
             if max_queries and len(cases) >= max_queries:
@@ -170,6 +189,7 @@ def load_queries(
                     query_vector=query_vector,
                     request_mode=request_mode,
                     skip_reasons=[],
+                    segment=_segment_from_payload(payload),
                 )
                 cases.append(case)
                 if max_queries and len(cases) >= max_queries:

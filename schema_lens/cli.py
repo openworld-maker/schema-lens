@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from pathlib import Path
 from time import perf_counter
@@ -11,14 +12,15 @@ from typing import Any
 
 import typer
 
-from schema_lens.changesets.apply_queryparams import merge_queryparams
 from schema_lens.changesets.parser import parse_changeset
 from schema_lens.changesets.validator import validate_changeset
 from schema_lens.ci.summarize import build_ci_summary_markdown
-from schema_lens.compare.diff import compare_replay
-from schema_lens.compare.explain_fetcher import fetch_explains
+from schema_lens.compat.adapters import (
+    configset_upload_supported,
+    metrics_supported,
+    vector_supported,
+)
 from schema_lens.compare.gate import evaluate_gate, load_gate_policy
-from schema_lens.compare.rewrite_diff import load_synonym_rules_from_changes, run_rewrite_diff
 from schema_lens.config import RunManifest
 from schema_lens.dashboard.app import create_dashboard_app
 from schema_lens.data.docs_loader import load_docs
@@ -32,9 +34,14 @@ from schema_lens.http.client import SolrHttpClient
 from schema_lens.logging import configure_logging
 from schema_lens.ltr.capture import capture_ltr_impact
 from schema_lens.monitor.runner import run_monitor
-from schema_lens.perf.analyzer import analyze_performance
 from schema_lens.perf.solr_metrics import collect_solr_runtime_snapshot
+from schema_lens.privacy import (
+    mask_payload as privacy_mask_payload,
+)
+from schema_lens.plugins.contracts.auth import AuthProviderPlugin
 from schema_lens.queries.loader import load_queries
+from schema_lens.queries.model import QueryCase
+from schema_lens.queries.normalize import normalize_q, query_fingerprint
 from schema_lens.queries.sampler import sample_queries
 from schema_lens.queries.sanitize import sanitize_params
 from schema_lens.queries.sources.solr_request_log import extract_queries_from_log
@@ -42,10 +49,48 @@ from schema_lens.recommend.engine import build_recommendations
 from schema_lens.replay.runner import run_replay
 from schema_lens.report.html_report import render_html_report
 from schema_lens.report.json_report import build_report_json
+from schema_lens.rollout import (
+    build_alias_swap_plan,
+    build_canary_plan,
+    build_rollback_plan,
+    compare_git_vs_live_configset,
+    execute_alias_swap,
+    verify_post_cutover,
+)
 from schema_lens.rootcause.engine import analyze_root_causes
+from schema_lens.runtime import (
+    build_segment_payload,
+    build_and_enforce_privacy_report,
+    cleanup_plugins,
+    emit_observability_event,
+    execute_plugins,
+    finalize_governance_manifest,
+    finalize_observability_outputs,
+    initialize_governance,
+    initialize_observability,
+    initialize_plugins,
+    initialize_privacy,
+    initialize_security,
+    load_or_extract_queries,
+    load_or_sample_docs,
+    run_compare_stage,
+    run_explain_flow,
+    run_ltr_impact,
+    run_performance_analyze_flow,
+    run_recommendations,
+    run_replay_stage,
+    run_root_cause,
+    run_rewrite_diff_flow,
+    run_snapshot_and_compat,
+    run_vector_flow,
+    write_report_artifacts,
+)
 from schema_lens.schema.preflight import run_preflight
 from schema_lens.shadow.manager import cleanup_shadow, create_shadow
-from schema_lens.snapshot.snapshotter import capture_snapshot, load_snapshot
+from schema_lens.snapshot.snapshotter import capture_snapshot
+from schema_lens.security import (
+    redact_payload,
+)
 from schema_lens.solr.admin_api import system_info
 from schema_lens.solr.collections_api import cluster_status
 from schema_lens.solr.schema_api import get_schema
@@ -53,13 +98,8 @@ from schema_lens.solr.update_api import post_docs
 from schema_lens.util.git import current_git_commit_short
 from schema_lens.util.io import ensure_dir, read_json, write_json, write_jsonl, write_text
 from schema_lens.util.time import utc_now_iso
-from schema_lens.vector.compare import compare_vector_hybrid
-from schema_lens.vector.replay import run_vector_scenarios
 from schema_lens.vector.scenario_parser import parse_vector_runtime_config
-from schema_lens.vector.sensitivity import run_hybrid_sensitivity
 from schema_lens.vector.validation import (
-    augment_docs_with_embeddings,
-    load_embeddings,
     validate_vector_setup,
 )
 
@@ -69,11 +109,17 @@ queries_app = typer.Typer(help="Query source operations")
 docs_app = typer.Typer(help="Document source operations")
 golden_app = typer.Typer(help="Golden query operations")
 ci_app = typer.Typer(help="CI summary operations")
+api_app = typer.Typer(help="API service mode operations")
+rollout_app = typer.Typer(help="GitOps and rollout orchestration operations")
 app.add_typer(shadow_app, name="shadow")
 app.add_typer(queries_app, name="queries")
 app.add_typer(docs_app, name="docs")
 app.add_typer(golden_app, name="golden")
 app.add_typer(ci_app, name="ci")
+app.add_typer(api_app, name="api")
+app.add_typer(rollout_app, name="rollout")
+LOGGER = logging.getLogger(__name__)
+_PRIVACY_RUNTIME_CFG: dict[str, Any] = {}
 
 
 def _hash_obj(data: Any) -> str:
@@ -116,6 +162,33 @@ def _parse_weights(raw: str | None) -> list[float] | None:
 
 def _disabled_section(reason: str) -> dict[str, Any]:
     return {"enabled": False, "reason": reason}
+
+
+def _write_json_maybe_redacted(
+    path: Path,
+    payload: dict[str, Any],
+    *,
+    redact: bool,
+    extra_sensitive_keys: list[str] | None = None,
+    privacy_cfg: dict[str, Any] | None = None,
+) -> None:
+    out_payload: dict[str, Any] = payload
+    if redact:
+        redacted = redact_payload(payload, extra_sensitive_keys=extra_sensitive_keys)
+        out_payload = redacted if isinstance(redacted, dict) else payload
+    active_privacy_cfg = privacy_cfg if isinstance(privacy_cfg, dict) else _PRIVACY_RUNTIME_CFG
+    if isinstance(active_privacy_cfg, dict) and active_privacy_cfg.get("enabled"):
+        masked = privacy_mask_payload(
+            out_payload,
+            salt=str(active_privacy_cfg.get("salt", "schema-lens")),
+            email=bool(active_privacy_cfg.get("mask_email", True)),
+            uuid=bool(active_privacy_cfg.get("mask_uuid", True)),
+            numeric_id_hash=bool(active_privacy_cfg.get("numeric_id_hash", True)),
+            allowlist=active_privacy_cfg.get("allowlist") if isinstance(active_privacy_cfg.get("allowlist"), list) else None,
+            denylist=active_privacy_cfg.get("denylist") if isinstance(active_privacy_cfg.get("denylist"), list) else None,
+        )
+        out_payload = masked if isinstance(masked, dict) else out_payload
+    write_json(path, out_payload)
 
 
 def _inspect_collection(solr_url: str, collection: str, verbose: bool = False) -> dict[str, Any]:
@@ -491,20 +564,155 @@ def compare_env(
 def serve(
     run: Path | None = typer.Option(None, "--run", exists=True, readable=True),
     compare: Path | None = typer.Option(None, "--compare", exists=True, readable=True),
+    api_url: str | None = typer.Option(None, "--api-url"),
+    run_id: str | None = typer.Option(None, "--run-id"),
     port: int = typer.Option(8080, "--port"),
 ) -> None:
     """Serve a read-only local dashboard for run artifacts."""
     import uvicorn
 
-    if run is None and compare is None:
-        raise typer.BadParameter("Provide either --run or --compare")
-    if run is not None and compare is not None:
-        raise typer.BadParameter("Use only one of --run or --compare")
-    source = run if run is not None else compare
-    assert source is not None
-    base_path = source if source.is_dir() else source.parent
-    app_instance = create_dashboard_app(base_path.resolve())
+    local_mode = run is not None or compare is not None
+    api_mode = api_url is not None or run_id is not None
+    if local_mode and api_mode:
+        raise typer.BadParameter("Use either local artifact options or --api-url/--run-id")
+    if not local_mode and not api_mode:
+        raise typer.BadParameter("Provide --run/--compare or --api-url with --run-id")
+
+    if api_mode:
+        if not api_url or not run_id:
+            raise typer.BadParameter("--api-url and --run-id are both required for API-backed mode")
+        app_instance = create_dashboard_app(api_base_url=api_url, run_id=run_id)
+    else:
+        if run is not None and compare is not None:
+            raise typer.BadParameter("Use only one of --run or --compare")
+        source = run if run is not None else compare
+        assert source is not None
+        base_path = source if source.is_dir() else source.parent
+        app_instance = create_dashboard_app(base_path.resolve())
     uvicorn.run(app_instance, host="127.0.0.1", port=port)
+
+
+@api_app.command("serve")
+def api_serve(
+    out: Path = typer.Option(Path("out/api"), "--out"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8090, "--port"),
+    local_only: bool = typer.Option(True, "--local-only/--no-local-only"),
+) -> None:
+    """Run schema-lens REST API service."""
+    import uvicorn
+    from schema_lens.api import create_api_app
+
+    ensure_dir(out)
+    app_instance = create_api_app(base_dir=out.resolve(), local_only=local_only)
+    uvicorn.run(app_instance, host=host, port=port)
+
+
+@rollout_app.command("git-drift")
+def rollout_git_drift(
+    solr_url: str = typer.Option(..., "--solr-url"),
+    collection: str = typer.Option(..., "--collection"),
+    local_configset_dir: Path = typer.Option(..., "--local-configset-dir", exists=True, readable=True),
+    out: Path = typer.Option(..., "--out"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Compare Git-tracked local configset against live cluster configset."""
+    configure_logging(verbose)
+    client = SolrHttpClient(solr_url, verbose=verbose)
+    try:
+        payload = compare_git_vs_live_configset(
+            client=client,
+            collection=collection,
+            local_configset_dir=local_configset_dir,
+        )
+    finally:
+        client.close()
+    write_json(out, payload)
+    typer.echo(str(out))
+
+
+@rollout_app.command("canary-plan")
+def rollout_canary_plan(
+    baseline_collection: str = typer.Option(..., "--baseline-collection"),
+    canary_collection: str = typer.Option(..., "--canary-collection"),
+    traffic_sample_ratio: float = typer.Option(0.1, "--traffic-sample-ratio"),
+    replay_query_count: int = typer.Option(500, "--replay-query-count"),
+    policy_bundle: list[Path] | None = typer.Option(None, "--policy-bundle"),
+    out: Path = typer.Option(..., "--out"),
+) -> None:
+    """Generate deterministic canary rollout plan (dry-run)."""
+    payload = build_canary_plan(
+        baseline_collection=baseline_collection,
+        canary_collection=canary_collection,
+        traffic_sample_ratio=traffic_sample_ratio,
+        replay_query_count=replay_query_count,
+        policy_bundle_paths=[str(path.resolve()) for path in (policy_bundle or [])],
+    )
+    write_json(out, payload)
+    typer.echo(str(out))
+
+
+@rollout_app.command("alias-swap-plan")
+def rollout_alias_swap_plan(
+    alias: str = typer.Option(..., "--alias"),
+    from_collection: str = typer.Option(..., "--from-collection"),
+    to_collection: str = typer.Option(..., "--to-collection"),
+    out: Path = typer.Option(..., "--out"),
+    execute: bool = typer.Option(False, "--execute/--dry-run"),
+    solr_url: str | None = typer.Option(None, "--solr-url"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Generate alias swap plan and optionally execute it."""
+    payload = build_alias_swap_plan(
+        alias=alias,
+        source_collection=from_collection,
+        target_collection=to_collection,
+    )
+    if execute:
+        if not solr_url:
+            raise typer.BadParameter("--solr-url is required when --execute is set")
+        client = SolrHttpClient(solr_url, verbose=verbose)
+        try:
+            result = execute_alias_swap(client, alias=alias, target_collection=to_collection)
+        finally:
+            client.close()
+        payload["mode"] = "execute"
+        payload["result"] = result
+    write_json(out, payload)
+    typer.echo(str(out))
+
+
+@rollout_app.command("rollback-plan")
+def rollout_rollback_plan(
+    alias: str = typer.Option(..., "--alias"),
+    previous_collection: str = typer.Option(..., "--previous-collection"),
+    out: Path = typer.Option(..., "--out"),
+) -> None:
+    """Generate rollback plan artifact (dry-run)."""
+    payload = build_rollback_plan(alias=alias, previous_collection=previous_collection)
+    write_json(out, payload)
+    typer.echo(str(out))
+
+
+@rollout_app.command("verify-post-cutover")
+def rollout_verify_post_cutover(
+    canary_compare: Path = typer.Option(..., "--canary-compare", exists=True, readable=True),
+    prod_compare: Path = typer.Option(..., "--prod-compare", exists=True, readable=True),
+    overlap_threshold: float = typer.Option(0.7, "--overlap-threshold"),
+    high_risk_threshold_pct: float = typer.Option(5.0, "--high-risk-threshold-pct"),
+    out: Path = typer.Option(..., "--out"),
+) -> None:
+    """Verify post-cutover quality gates from canary/prod compare artifacts."""
+    canary_payload = read_json(canary_compare)
+    prod_payload = read_json(prod_compare)
+    payload = verify_post_cutover(
+        canary_compare=canary_payload if isinstance(canary_payload, dict) else {},
+        prod_compare=prod_payload if isinstance(prod_payload, dict) else {},
+        overlap_threshold=overlap_threshold,
+        high_risk_threshold_pct=high_risk_threshold_pct,
+    )
+    write_json(out, payload)
+    typer.echo(str(out))
 
 
 @app.command("monitor")
@@ -714,6 +922,9 @@ def run(
             "snapshot_system_json": str((out / "snapshot.system.json").resolve()),
             "snapshot_collection_json": str((out / "snapshot.collection.json").resolve()),
             "snapshot_hash_txt": str((out / "snapshot.hash.txt").resolve()),
+            "compat_json": str((out / "compat.json").resolve()),
+            "governance_json": str((out / "governance.json").resolve()),
+            "privacy_json": str((out / "privacy.json").resolve()),
             "schema_risk_json": str((out / "schema_risk.json").resolve()),
             "shadow_json": str((out / "shadow.json").resolve()),
             "docs_sample_jsonl": str((out / "docs_sample.jsonl").resolve()),
@@ -723,11 +934,18 @@ def run(
             "vector_validation_json": str((out / "vector_validation.json").resolve()),
             "hybrid_sensitivity_json": str((out / "hybrid_sensitivity.json").resolve()),
             "perf_metrics_json": str((out / "perf_metrics.json").resolve()),
+            "segments_json": str((out / "segments.json").resolve()),
             "rootcauses_json": str((out / "rootcauses.json").resolve()),
             "recommendations_json": str((out / "recommendations.json").resolve()),
             "env_compare_json": str((out / "env_compare.json").resolve()),
             "monitor_history_jsonl": str((out / "monitor_history.jsonl").resolve()),
             "ltr_impact_json": str((out / "ltr_impact.json").resolve()),
+            "audit_json": str((out / "audit.json").resolve()),
+            "observability_events_jsonl": str((out / "observability_events.jsonl").resolve()),
+            "otel_spans_json": str((out / "otel_spans.json").resolve()),
+            "prometheus_metrics_txt": str((out / "prometheus_metrics.prom").resolve()),
+            "webhook_deliveries_json": str((out / "webhook_deliveries.json").resolve()),
+            "plugins_json": str((out / "plugins.json").resolve()),
             "report_json": str((out / "report.json").resolve()),
             "report_html": str((out / "report.html").resolve()),
         },
@@ -804,8 +1022,8 @@ def run(
     )
     manifest.settings["vector"] = vector_runtime_cfg.to_dict()
 
-    baseline_client = SolrHttpClient(baseline_url, verbose=verbose)
-    shadow_client = SolrHttpClient(shadow_url, verbose=verbose)
+    baseline_client: SolrHttpClient | None = None
+    shadow_client: SolrHttpClient | None = None
     run_started = perf_counter()
 
     shadow_name: str | None = None
@@ -830,17 +1048,55 @@ def run(
     baseline_schema: dict[str, Any] = {}
     inspect_payload: dict[str, Any] = {}
     perf_before: dict[str, Any] = {"baseline": {}, "shadow": {}}
+    plugins_runtime = None
+    compat_caps: dict[str, Any] = {}
+    observability_runtime = None
+    governance_data: dict[str, Any] = {"enabled": False}
+    governance_sign_secret: str | None = None
+    privacy_runtime_cfg: dict[str, Any] = {"enabled": False}
+    persist_sensitive_effective = True
+
+    def emit_event(event_type: str, payload: dict[str, Any]) -> None:
+        if observability_runtime is None:
+            return
+        emit_observability_event(
+            observability_runtime,
+            event_type=event_type,
+            timestamp=utc_now_iso(),
+            run_id=run_id,
+            payload=payload,
+        )
+    security_profile_name = "local-dev"
+    security_redact_artifacts = False
+    security_persist_sensitive = True
+    security_extra_sensitive_keys: list[str] = []
 
     def stage(name: str):
         class StageCtx:
             def __enter__(self_inner):
-                manifest.stages[name] = {"started_at": utc_now_iso(), "status": "running"}
+                started_at = utc_now_iso()
+                manifest.stages[name] = {"started_at": started_at, "status": "running"}
+                if observability_runtime is not None:
+                    observability_runtime.otel.start_span(
+                        name,
+                        name=name,
+                        started_at=started_at,
+                        attributes={
+                            "run_id": run_id,
+                            "baseline_url": baseline_url,
+                            "baseline_collection": baseline_collection,
+                            "shadow_url": shadow_url,
+                            "feature.vector_enabled": bool(vector_runtime_cfg.enabled),
+                        },
+                    )
                 self_inner.started = perf_counter()
                 return self_inner
 
             def __exit__(self_inner, exc_type, exc, tb):
                 elapsed = perf_counter() - self_inner.started
                 manifest.stages[name]["duration_seconds"] = round(elapsed, 3)
+                if observability_runtime is not None:
+                    observability_runtime.otel.end_span(name, ended_at=utc_now_iso())
                 if exc:
                     manifest.stages[name]["status"] = "failed"
                     manifest.stages[name]["error"] = str(exc)
@@ -851,54 +1107,134 @@ def run(
         return StageCtx()
 
     try:
+        with stage("observability_init"):
+            observability_runtime = initialize_observability(
+                changeset_raw=changeset.raw,
+                manifest_settings=manifest.settings,
+            )
+            emit_event(
+                "run_started",
+                {
+                    "baseline_collection": baseline_collection,
+                    "k": effective_k,
+                },
+            )
+
+        with stage("governance_init"):
+            governance_runtime = initialize_governance(
+                changeset_raw=changeset.raw,
+                changeset_path=changeset_path,
+            )
+            governance_data = governance_runtime.data
+            governance_sign_secret = governance_runtime.sign_secret
+
+            manifest.settings["governance"] = governance_data
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["governance_json"]),
+                governance_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+
+        with stage("plugins_init"):
+            plugins_runtime = initialize_plugins(
+                changeset_raw=changeset.raw,
+                changeset_path=changeset_path,
+                run_id=run_id,
+                out_dir=out,
+                manifest_payload=manifest.to_dict(),
+                logger=LOGGER,
+            )
+            manifest.settings["plugins"] = plugins_runtime.settings
+
+        with stage("security_init"):
+            auth_plugins = [
+                plugin
+                for plugin in (plugins_runtime.active_plugins if plugins_runtime is not None else [])
+                if isinstance(plugin, AuthProviderPlugin)
+            ]
+            security_runtime = initialize_security(
+                changeset_raw=changeset.raw,
+                changeset_path=changeset_path,
+                baseline_cfg=baseline_cfg,
+                shadow_cfg=shadow_cfg,
+                active_auth_plugins=auth_plugins,
+                run_id=run_id,
+                started=started,
+                baseline_url=baseline_url,
+                baseline_collection=baseline_collection,
+                shadow_url=shadow_url,
+                verbose=verbose,
+                write_audit=lambda payload, redact, extra_keys: _write_json_maybe_redacted(
+                    Path(manifest.outputs["audit_json"]),
+                    payload,
+                    redact=redact,
+                    extra_sensitive_keys=extra_keys,
+                ),
+            )
+            security_profile_name = security_runtime.profile_name
+            security_redact_artifacts = security_runtime.redact_artifacts
+            security_persist_sensitive = security_runtime.persist_sensitive_artifacts
+            security_extra_sensitive_keys = security_runtime.extra_sensitive_keys
+            baseline_client = security_runtime.baseline_client
+            shadow_client = security_runtime.shadow_client
+            manifest.settings["security"] = security_runtime.manifest_security
+
+        with stage("privacy_init"):
+            global _PRIVACY_RUNTIME_CFG
+            privacy_runtime = initialize_privacy(
+                changeset_raw=changeset.raw,
+                security_persist_sensitive=security_persist_sensitive,
+            )
+            privacy_runtime_cfg = privacy_runtime.config
+            _PRIVACY_RUNTIME_CFG = privacy_runtime_cfg
+            persist_sensitive_effective = privacy_runtime.persist_sensitive_effective
+            manifest.settings["privacy"] = {
+                "enabled": privacy_runtime_cfg["enabled"],
+                "profile": privacy_runtime_cfg["profile"],
+                "export_safe": privacy_runtime_cfg["export_safe"],
+                "raw_doc_suppression": privacy_runtime_cfg["raw_doc_suppression"],
+                "hashed_doc_id_only": privacy_runtime_cfg["hashed_doc_id_only"],
+                "persist_sensitive": privacy_runtime_cfg["persist_sensitive"],
+            }
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["privacy_json"]),
+                {
+                    "enabled": privacy_runtime_cfg["enabled"],
+                    "profile": privacy_runtime_cfg["profile"],
+                    "export_safe": privacy_runtime_cfg["export_safe"],
+                },
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+                privacy_cfg=privacy_runtime_cfg,
+            )
+
         with stage("snapshot"):
-            request_defaults = baseline_cfg.get("request_defaults", {})
-            if snapshot:
-                snapshot_data = load_snapshot(snapshot.resolve())
-                snapshot_manifest = snapshot_data.get("manifest", {})
-                baseline_schema = snapshot_data.get("schema", {})
-                system = snapshot_data.get("system", {})
-                collection_state = snapshot_data.get("collection_state", {})
-                snapshot_hash = str(snapshot_data.get("hash"))
-                inspect_payload = {
-                    "solr_url": baseline_url,
-                    "collection": baseline_collection,
-                    "schema": baseline_schema,
-                    "system_info": system,
-                    "cluster_status": collection_state,
-                    "snapshot_manifest": snapshot_manifest,
-                }
+            if baseline_client is None or shadow_client is None:
+                raise StageError("security_init failed to initialize clients")
+            snapshot_runtime = run_snapshot_and_compat(
+                snapshot_path=snapshot,
+                baseline_url=baseline_url,
+                baseline_collection=baseline_collection,
+                out_dir=out,
+                request_defaults=baseline_cfg.get("request_defaults", {}),
+                verbose=verbose,
+                outputs=manifest.outputs,
+                manifest_inputs=manifest.inputs,
+            )
+            baseline_schema = snapshot_runtime.baseline_schema
+            inspect_payload = snapshot_runtime.inspect_payload
+            compat_caps = snapshot_runtime.compat_caps
+            compat_payload = snapshot_runtime.compat_payload
+            snapshot_hash = snapshot_runtime.snapshot_hash
 
-                write_json(Path(manifest.outputs["snapshot_json"]), snapshot_manifest)
-                write_json(Path(manifest.outputs["snapshot_schema_json"]), baseline_schema)
-                write_json(Path(manifest.outputs["snapshot_system_json"]), system)
-                write_json(Path(manifest.outputs["snapshot_collection_json"]), collection_state)
-                write_text(Path(manifest.outputs["snapshot_hash_txt"]), snapshot_hash + "\n")
-                manifest.inputs["snapshot_path"] = str(snapshot.resolve())
-            else:
-                captured = capture_snapshot(
-                    solr_url=baseline_url,
-                    collection=baseline_collection,
-                    out_dir=out,
-                    request_defaults=request_defaults,
-                    verbose=verbose,
-                )
-                snapshot_manifest = captured["manifest"]
-                baseline_schema = captured["schema"]
-                system = captured["system"]
-                collection_state = captured["collection_state"]
-                snapshot_hash = str(snapshot_manifest.get("hash", ""))
-                inspect_payload = {
-                    "solr_url": baseline_url,
-                    "collection": baseline_collection,
-                    "schema": baseline_schema,
-                    "system_info": system,
-                    "cluster_status": collection_state,
-                    "snapshot_manifest": snapshot_manifest,
-                }
-                manifest.inputs["snapshot_path"] = str(out.resolve())
-
-            write_json(Path(manifest.outputs["inspect_json"]), inspect_payload)
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compat_json"]),
+                compat_payload,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+            manifest.settings["compatibility"] = compat_payload
             manifest.baseline = {
                 "solr_url": baseline_url,
                 "collection": baseline_collection,
@@ -924,6 +1260,20 @@ def run(
                 raise StageError("preflight blocked run due to HIGH schema risks")
 
         with stage("shadow_create"):
+            has_configset_patch_changes = any(
+                isinstance(op, dict)
+                and op.get("op") in {"schema.synonym.update", "schema.stopwords.update"}
+                for op in changeset.changes
+            )
+            if has_configset_patch_changes and not configset_upload_supported(compat_caps):
+                manifest.settings.setdefault("compatibility", {}).setdefault(
+                    "fallbacks", []
+                ).append(
+                    {
+                        "feature": "configset_upload",
+                        "reason": "configset_upload_supported capability is unavailable",
+                    }
+                )
             shadow_manifest = create_shadow(
                 client=shadow_client,
                 baseline_collection=baseline_collection,
@@ -952,90 +1302,26 @@ def run(
             }
 
         with stage("docs_sample_or_load"):
-            if docs_source_type == "file":
-                if docs_path is None:
-                    raise StageError("docs path unavailable for file source")
-                docs_payload = load_docs(
-                    docs_path,
-                    fmt=docs_source.get("format"),
-                    id_field=docs_source.get("id_field", "id"),
-                    sample_n=data_cfg.get("sample_n"),
-                )
-            else:
-                source_url = str(docs_source.get("solr_url", baseline_url))
-                source_collection = str(docs_source.get("collection", baseline_collection))
-                source_mode = str(docs_source.get("mode", "cursormark"))
-                source_query = str(docs_source.get("query", "*:*"))
-                source_fl = str(docs_source.get("fl", "*"))
-                source_sort = str(docs_source.get("sort", "id asc"))
-                source_sample_n = int(docs_source.get("sample_n", data_cfg.get("sample_n", 50000)))
-                source_batch_size = int(docs_source.get("batch_size", batch_size))
-
-                out_sample_path = docs_source.get("out_sample_path")
-                if isinstance(out_sample_path, str):
-                    sample_path = Path(out_sample_path)
-                    if not sample_path.is_absolute():
-                        sample_path = (Path.cwd() / sample_path).resolve()
-                else:
-                    sample_path = Path(manifest.outputs["docs_sample_jsonl"])
-
-                docs_client = SolrHttpClient(source_url, verbose=verbose)
-                try:
-                    docs_payload, used_mode = sample_docs_from_solr(
-                        client=docs_client,
-                        collection=source_collection,
-                        mode=source_mode,
-                        query=source_query,
-                        fl=source_fl,
-                        sort=source_sort,
-                        sample_n=source_sample_n,
-                        batch_size=source_batch_size,
-                    )
-                finally:
-                    docs_client.close()
-
-                write_jsonl(sample_path, docs_payload)
-                manifest.inputs["docs_sample_path"] = str(sample_path.resolve())
-                manifest.settings["doc_sampling"] = {
-                    "solr_url": source_url,
-                    "collection": source_collection,
-                    "mode_requested": source_mode,
-                    "mode_used": used_mode,
-                    "query": source_query,
-                    "fl": source_fl,
-                    "sort": source_sort,
-                    "sample_n": source_sample_n,
-                    "batch_size": source_batch_size,
-                }
-
-            if vector_runtime_cfg.enabled:
-                embedding_source = (
-                    vector_runtime_cfg.embedding_source
-                    if isinstance(vector_runtime_cfg.embedding_source, dict)
-                    else {}
-                )
-                embedding_map, embedding_source_type = load_embeddings(
-                    embedding_source=embedding_source,
+            try:
+                docs_payload = load_or_sample_docs(
+                    docs_source_type=docs_source_type,
+                    docs_source=docs_source if isinstance(docs_source, dict) else {},
+                    docs_path=docs_path,
+                    data_cfg=data_cfg if isinstance(data_cfg, dict) else {},
+                    baseline_url=baseline_url,
+                    baseline_collection=baseline_collection,
+                    batch_size=batch_size,
+                    manifest_inputs=manifest.inputs,
+                    manifest_settings=manifest.settings,
+                    outputs=manifest.outputs,
+                    persist_sensitive_effective=bool(persist_sensitive_effective),
+                    privacy_runtime_cfg=privacy_runtime_cfg,
+                    vector_runtime_cfg=vector_runtime_cfg,
                     changeset_path=changeset_path,
+                    verbose=verbose,
                 )
-                if embedding_map:
-                    id_field = str(embedding_source.get("id_field", "id"))
-                    vector_field = str(
-                        embedding_source.get("vector_field", vector_runtime_cfg.field)
-                    )
-                    embedding_stats = augment_docs_with_embeddings(
-                        docs=docs_payload,
-                        embedding_map=embedding_map,
-                        id_field=id_field,
-                        vector_field=vector_field,
-                    )
-                    manifest.settings["vector_embedding_ingest"] = {
-                        "source_type": embedding_source_type,
-                        "path": embedding_source.get("path"),
-                        "id_field": id_field,
-                        "vector_field": vector_field,
-                        "stats": embedding_stats,
-                    }
+            except ValueError as exc:
+                raise StageError(str(exc)) from exc
 
         with stage("index"):
             if not shadow_name:
@@ -1054,86 +1340,58 @@ def run(
             write_json(shadow_json_path, existing_shadow_manifest)
 
         with stage("queries_extract_or_load"):
-            if query_source_type == "file":
-                query_cases = load_queries(
-                    queries_path,
-                    fmt=queries_source.get("format", "simple"),
-                    max_queries=query_cfg.get("max_queries"),
-                )
-            else:
-                extracted_rows = extract_queries_from_log(
-                    queries_path,
-                    fmt=str(queries_source.get("format", "solr_params")),
-                )
-                sanitize_cfg = query_cfg.get("sanitize", {})
-                if not isinstance(sanitize_cfg, dict):
-                    sanitize_cfg = {}
-                sanitize_enabled = bool(sanitize_cfg.get("enabled", True))
-                sanitize_rules = sanitize_cfg.get("rules")
-
-                cleaned_rows = []
-                for row in extracted_rows:
-                    params = row.get("params", {})
-                    if not isinstance(params, dict):
-                        continue
-                    cleaned_rows.append(
-                        {
-                            **row,
-                            "params": sanitize_params(
-                                params,
-                                enabled=sanitize_enabled,
-                                rules=sanitize_rules if isinstance(sanitize_rules, list) else None,
-                            ),
-                        }
-                    )
-
-                sampling_cfg = query_cfg.get("sampling", {})
-                if not isinstance(sampling_cfg, dict):
-                    sampling_cfg = {}
-                sampling_mode = str(sampling_cfg.get("mode", "reservoir"))
-                sampling_seed = sampling_cfg.get("seed")
-
-                sampled_rows = sample_queries(
-                    cleaned_rows,
-                    mode=sampling_mode,
-                    max_queries=query_cfg.get("max_queries"),
-                    seed=sampling_seed if isinstance(sampling_seed, int) else None,
-                )
-                extracted_path = Path(manifest.outputs["queries_extracted_jsonl"])
-                write_jsonl(extracted_path, sampled_rows)
-                manifest.inputs["queries_extracted_path"] = str(extracted_path.resolve())
-                manifest.settings["query_sampling"] = {
-                    "mode": sampling_mode,
-                    "seed": sampling_seed,
-                    "sanitize_enabled": sanitize_enabled,
-                }
-                query_cases = load_queries(extracted_path, fmt="jsonl")
+            query_cases = load_or_extract_queries(
+                query_source_type=query_source_type,
+                queries_source=queries_source if isinstance(queries_source, dict) else {},
+                queries_path=queries_path,
+                query_cfg=query_cfg if isinstance(query_cfg, dict) else {},
+                outputs=manifest.outputs,
+                manifest_inputs=manifest.inputs,
+                manifest_settings=manifest.settings,
+                persist_sensitive_effective=bool(persist_sensitive_effective),
+            )
 
         with stage("vector_validate"):
             if vector_runtime_cfg.enabled:
-                vector_validation_data = validate_vector_setup(
-                    baseline_schema=baseline_schema,
-                    vector_cfg=vector_runtime_cfg,
-                    query_cases=query_cases,
-                    vector_dimension_override=vector_dimension_override,
-                )
+                if not vector_supported(compat_caps):
+                    vector_runtime_cfg.enabled = False
+                    vector_validation_data = {
+                        "enabled": False,
+                        "reason": "vector_query_supported capability is unavailable for this Solr version",
+                    }
+                    manifest.settings["vector_validation"] = {
+                        "summary": {},
+                        "migration_required": False,
+                        "compatibility_skipped": True,
+                    }
+                else:
+                    vector_validation_data = validate_vector_setup(
+                        baseline_schema=baseline_schema,
+                        vector_cfg=vector_runtime_cfg,
+                        query_cases=query_cases,
+                        vector_dimension_override=vector_dimension_override,
+                    )
+                    manifest.settings["vector_validation"] = {
+                        "summary": vector_validation_data.get("summary", {}),
+                        "migration_required": vector_validation_data.get("migration_required", False),
+                    }
+                    if vector_validation_data.get("block_run"):
+                        raise StageError("vector validation blocked run")
                 write_json(
                     Path(manifest.outputs["vector_validation_json"]),
                     vector_validation_data,
                 )
-                manifest.settings["vector_validation"] = {
-                    "summary": vector_validation_data.get("summary", {}),
-                    "migration_required": vector_validation_data.get("migration_required", False),
-                }
-                if vector_validation_data.get("block_run"):
-                    raise StageError("vector validation blocked run")
             else:
                 vector_validation_data = {"enabled": False, "findings": []}
                 write_json(Path(manifest.outputs["vector_validation_json"]), vector_validation_data)
 
         with stage("performance_prepare"):
             perf_cfg = changeset.raw.get("performance", {})
-            if isinstance(perf_cfg, dict) and perf_cfg.get("enabled", False):
+            if (
+                isinstance(perf_cfg, dict)
+                and perf_cfg.get("enabled", False)
+                and metrics_supported(compat_caps)
+            ):
                 cache_cfg = perf_cfg.get("caches", {})
                 cache_names = (
                     cache_cfg.get("names")
@@ -1168,278 +1426,278 @@ def run(
         with stage("replay"):
             if not shadow_name:
                 raise StageError("Shadow name unavailable during replay stage")
-            request_defaults = baseline_cfg.get("request_defaults", {})
-            merged_defaults = merge_queryparams(request_defaults, changeset.changes)
             replay_cfg = changeset.replay if hasattr(changeset, "replay") else {}
-            capture_cfg = {}
-            if isinstance(replay_cfg, dict):
-                capture_cfg = replay_cfg.get("capture", {})
-                if not isinstance(capture_cfg, dict):
-                    capture_cfg = {}
-            manifest.settings["replay_capture"] = capture_cfg
-            replay_data = run_replay(
+            replay_data, capture_cfg = run_replay_stage(
                 baseline_client=baseline_client,
                 baseline_collection=baseline_collection,
                 shadow_client=shadow_client,
                 shadow_collection=shadow_name,
-                queries=query_cases,
-                request_defaults=merged_defaults,
+                query_cases=query_cases,
+                request_defaults=baseline_cfg.get("request_defaults", {}),
+                changes=changeset.changes,
+                replay_cfg=replay_cfg if isinstance(replay_cfg, dict) else {},
                 k=effective_k,
-                capture_cfg=capture_cfg,
+                baseline_url=baseline_url,
+                shadow_url=shadow_url,
             )
-            replay_data["baseline"] = {
-                "solr_url": baseline_url,
-                "collection": baseline_collection,
-            }
-            replay_data["shadow"] = {
-                "solr_url": shadow_url,
-                "collection": shadow_name,
-            }
-            write_json(Path(manifest.outputs["replay_json"]), replay_data)
+            manifest.settings["replay_capture"] = capture_cfg
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["replay_json"]),
+                replay_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
             manifest.stats["queries_run"] = len(query_cases)
             manifest.stats["failures"] = replay_data.get("stats", {}).get("failures", 0)
 
         with stage("compare"):
-            compare_data = compare_replay(replay_data, effective_k)
-            compare_data["schema_safety_findings"] = schema_risk_data
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            compare_data = run_compare_stage(
+                replay_data=replay_data,
+                k=effective_k,
+                schema_risk_data=schema_risk_data,
+                compatibility=manifest.settings.get("compatibility", {}),
+                governance=manifest.settings.get("governance", {}),
+            )
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+
+        with stage("segment_report"):
+            segment_report = build_segment_payload(
+                changeset_raw=changeset.raw,
+                compare_data=compare_data,
+            )
+            compare_data["segments"] = segment_report
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["segments_json"]),
+                segment_report,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("scenario_replay"):
-            if vector_runtime_cfg.enabled:
-                if not shadow_name:
-                    raise StageError("Shadow name unavailable during scenario_replay stage")
-                request_defaults = baseline_cfg.get("request_defaults", {})
-                merged_defaults = merge_queryparams(request_defaults, changeset.changes)
-                vector_replay_data = run_vector_scenarios(
+            try:
+                vector_flow = run_vector_flow(
+                    vector_runtime_cfg=vector_runtime_cfg,
+                    shadow_name=shadow_name,
                     baseline_client=baseline_client,
                     baseline_collection=baseline_collection,
                     shadow_client=shadow_client,
-                    shadow_collection=shadow_name,
-                    queries=query_cases,
-                    request_defaults=merged_defaults,
-                    vector_cfg=vector_runtime_cfg,
+                    query_cases=query_cases,
+                    baseline_request_defaults=baseline_cfg.get("request_defaults", {}),
+                    changes=changeset.changes,
+                    effective_k=effective_k,
+                    replay_data=replay_data,
+                    out_dir=out,
                 )
-                replay_data["vector_scenarios"] = vector_replay_data
-                write_json(Path(manifest.outputs["replay_json"]), replay_data)
-
-                per_scenario_paths: dict[str, str] = {}
-                scenario_results = vector_replay_data.get("scenario_results", {})
-                if isinstance(scenario_results, dict):
-                    for scenario_name, payload in scenario_results.items():
-                        safe = "".join(
-                            ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in scenario_name
-                        )
-                        scenario_path = out / f"replay_{safe}.json"
-                        write_json(scenario_path, payload)
-                        per_scenario_paths[scenario_name] = str(scenario_path.resolve())
-                manifest.outputs["replay_scenarios"] = per_scenario_paths
-            else:
-                vector_replay_data = {"enabled": False, "scenario_results": {}}
+            except ValueError as exc:
+                raise StageError(str(exc)) from exc
+            vector_replay_data = vector_flow["vector_replay_data"]
+            manifest.outputs["replay_scenarios"] = vector_flow["replay_scenarios"]
+            if vector_runtime_cfg.enabled:
+                _write_json_maybe_redacted(
+                    Path(manifest.outputs["replay_json"]),
+                    replay_data,
+                    redact=security_redact_artifacts,
+                    extra_sensitive_keys=security_extra_sensitive_keys,
+                )
 
         with stage("vector_compare"):
-            if vector_runtime_cfg.enabled:
-                vector_compare = compare_vector_hybrid(
-                    scenario_replay=vector_replay_data,
-                    top_k=int(vector_runtime_cfg.evaluation.get("topK", effective_k)),
-                )
-                compare_data["vector_hybrid"] = vector_compare
-            else:
-                compare_data["vector_hybrid"] = {"enabled": False}
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            compare_data["vector_hybrid"] = vector_flow["vector_hybrid"]
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("hybrid_sensitivity"):
-            sensitivity_cfg = (
-                vector_runtime_cfg.evaluation.get("sensitivity", {})
-                if isinstance(vector_runtime_cfg.evaluation, dict)
-                else {}
-            )
-            if vector_runtime_cfg.enabled and bool(sensitivity_cfg.get("enabled", False)):
-                hybrid_sensitivity_data = run_hybrid_sensitivity(
-                    scenario_replay=vector_replay_data,
-                    weights=[float(w) for w in sensitivity_cfg.get("weights", [])],
-                    top_k=int(vector_runtime_cfg.evaluation.get("topK", effective_k)),
-                    candidate_pool=int(
-                        vector_runtime_cfg.evaluation.get("candidate_pool", max(100, effective_k))
-                    ),
-                )
-            else:
-                hybrid_sensitivity_data = {"enabled": False, "weights": [], "scenarios": []}
+            hybrid_sensitivity_data = vector_flow["hybrid_sensitivity"]
             compare_data["hybrid_sensitivity"] = hybrid_sensitivity_data
             write_json(Path(manifest.outputs["hybrid_sensitivity_json"]), hybrid_sensitivity_data)
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("rewrite_diff"):
-            rewrite_cfg = eval_cfg.get("rewrite_diff", {})
-            manifest.settings["rewrite_diff"] = rewrite_cfg if isinstance(rewrite_cfg, dict) else {}
-            if isinstance(rewrite_cfg, dict) and rewrite_cfg.get("enabled", False):
-                if not shadow_name:
-                    raise StageError("Shadow name unavailable during rewrite_diff stage")
-                synonym_rules = load_synonym_rules_from_changes(
-                    changeset.changes,
-                    changeset_path=str(changeset_path.resolve()),
-                )
-                has_synonym_changes = any(
-                    op.get("op") == "schema.synonym.update"
-                    for op in changeset.changes
-                    if isinstance(op, dict)
-                )
-                rewrite_data = run_rewrite_diff(
+            try:
+                rewrite_data, rewrite_settings = run_rewrite_diff_flow(
+                    eval_cfg=eval_cfg if isinstance(eval_cfg, dict) else {},
+                    changes=changeset.changes,
+                    changeset_path=changeset_path,
                     baseline_client=baseline_client,
                     baseline_collection=baseline_collection,
                     shadow_client=shadow_client,
-                    shadow_collection=shadow_name,
-                    replay_pairs=replay_data.get("pairs", []),
-                    diffs=compare_data.get("diffs", []),
-                    k=effective_k,
-                    rewrite_cfg=rewrite_cfg,
-                    synonym_rules=synonym_rules,
-                    has_synonym_changes=has_synonym_changes,
+                    shadow_name=shadow_name,
+                    replay_data=replay_data,
+                    compare_data=compare_data,
+                    effective_k=effective_k,
                 )
-                compare_data["rewrite_diff"] = rewrite_data
-                rewrite_flags_by_qid = {
-                    item.get("query_id"): item.get("risk_flags", [])
-                    for item in rewrite_data.get("per_query", [])
-                    if item.get("query_id") is not None
-                }
-                for diff_row in compare_data.get("diffs", []):
-                    qid = diff_row.get("query_id")
-                    flags = rewrite_flags_by_qid.get(qid, [])
-                    if not isinstance(diff_row.get("risk_flags"), list):
-                        diff_row["risk_flags"] = []
-                    for flag in flags:
-                        if flag not in diff_row["risk_flags"]:
-                            diff_row["risk_flags"].append(flag)
-                for diff_row in compare_data.get("top_regressions", []):
-                    qid = diff_row.get("query_id")
-                    flags = rewrite_flags_by_qid.get(qid, [])
-                    if not isinstance(diff_row.get("risk_flags"), list):
-                        diff_row["risk_flags"] = []
-                    for flag in flags:
-                        if flag not in diff_row["risk_flags"]:
-                            diff_row["risk_flags"].append(flag)
-            else:
-                compare_data["rewrite_diff"] = {
-                    "enabled": False,
-                    "per_query": [],
-                    "top_clause_deltas": [],
-                    "top_synonym_changed": [],
-                }
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            except ValueError as exc:
+                raise StageError(str(exc)) from exc
+            manifest.settings["rewrite_diff"] = rewrite_settings
+            compare_data["rewrite_diff"] = rewrite_data
+            if not bool(rewrite_data.get("enabled", False)):
+                _write_json_maybe_redacted(
+                    Path(manifest.outputs["compare_json"]),
+                    compare_data,
+                    redact=security_redact_artifacts,
+                    extra_sensitive_keys=security_extra_sensitive_keys,
+                )
 
         with stage("explain"):
-            explain_cfg = eval_cfg.get("explain", {})
-            if explain_cfg.get("enabled", False):
-                bundles = fetch_explains(
-                    baseline_client=baseline_client,
-                    baseline_collection=baseline_collection,
-                    shadow_client=shadow_client,
-                    shadow_collection=shadow_name,
-                    replay_pairs=replay_data.get("pairs", []),
-                    diffs=compare_data.get("diffs", []),
-                    k=effective_k,
-                    max_queries=int(explain_cfg.get("max_queries", 25)),
-                    max_docs_per_query=int(explain_cfg.get("max_docs_per_query", 3)),
-                    structured=bool(explain_cfg.get("structured", False)),
-                )
+            bundles, explain_fallback = run_explain_flow(
+                eval_cfg=eval_cfg if isinstance(eval_cfg, dict) else {},
+                compat_caps=compat_caps,
+                baseline_client=baseline_client,
+                baseline_collection=baseline_collection,
+                shadow_client=shadow_client,
+                shadow_name=shadow_name,
+                replay_data=replay_data,
+                compare_data=compare_data,
+                effective_k=effective_k,
+            )
+            if explain_fallback is not None:
+                compare_data.setdefault("compatibility", {}).setdefault("fallbacks", []).append(explain_fallback)
+            if bundles:
                 compare_data["explain_bundles"] = bundles
-                write_json(Path(manifest.outputs["compare_json"]), compare_data)
+                _write_json_maybe_redacted(
+                    Path(manifest.outputs["compare_json"]),
+                    compare_data,
+                    redact=security_redact_artifacts,
+                    extra_sensitive_keys=security_extra_sensitive_keys,
+                )
             else:
                 compare_data["explain_bundles"] = []
 
         with stage("performance_analyze"):
-            perf_cfg = changeset.raw.get("performance", {})
-            if isinstance(perf_cfg, dict) and perf_cfg.get("enabled", False):
-                cache_cfg = perf_cfg.get("caches", {})
-                cache_names = (
-                    cache_cfg.get("names")
-                    if isinstance(cache_cfg, dict) and isinstance(cache_cfg.get("names"), list)
-                    else None
-                )
-                perf_after = {
-                    "baseline": collect_solr_runtime_snapshot(
-                        client=baseline_client,
-                        collection=baseline_collection,
-                        cache_names=cache_names,
-                        include_luke=bool(
-                            (perf_cfg.get("index", {}) or {}).get("luke", True)
-                            if isinstance(perf_cfg.get("index"), dict)
-                            else True
-                        ),
-                    ),
-                    "shadow": collect_solr_runtime_snapshot(
-                        client=shadow_client,
-                        collection=shadow_name or "",
-                        cache_names=cache_names,
-                        include_luke=bool(
-                            (perf_cfg.get("index", {}) or {}).get("luke", True)
-                            if isinstance(perf_cfg.get("index"), dict)
-                            else True
-                        ),
-                    ),
-                }
-                percentiles_capture = perf_cfg.get("capture")
-                percentiles_cfg = (
-                    percentiles_capture if isinstance(percentiles_capture, dict) else {}
-                )
-                percentiles = (
-                    percentiles_cfg.get("percentiles")
-                    if isinstance(percentiles_cfg.get("percentiles"), list)
-                    else [50, 95, 99]
-                )
-                perf_metrics_data = analyze_performance(
-                    replay_data=replay_data,
-                    compare_data=compare_data,
-                    baseline_snapshot=perf_after["baseline"],
-                    shadow_snapshot=perf_after["shadow"],
-                    changes=changeset.changes,
-                    percentiles=[int(item) for item in percentiles],
-                )
-                perf_metrics_data["before"] = perf_before
-                perf_metrics_data["after"] = perf_after
-            else:
-                perf_metrics_data = _disabled_section("Performance capture not enabled.")
-                compare_data["performance"] = perf_metrics_data
+            perf_metrics_data = run_performance_analyze_flow(
+                changeset_raw=changeset.raw,
+                compat_caps=compat_caps,
+                baseline_client=baseline_client,
+                baseline_collection=baseline_collection,
+                shadow_client=shadow_client,
+                shadow_name=shadow_name,
+                replay_data=replay_data,
+                compare_data=compare_data,
+                changes=changeset.changes,
+                perf_before=perf_before,
+                disabled_section=_disabled_section,
+            )
+            compare_data["performance"] = perf_metrics_data
             write_json(Path(manifest.outputs["perf_metrics_json"]), perf_metrics_data)
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("root_cause"):
-            root_causes_data = analyze_root_causes(
+            root_causes_data = run_root_cause(
                 compare_data=compare_data,
                 changes=changeset.changes,
                 baseline_request_defaults=baseline_cfg.get("request_defaults", {}),
             )
             compare_data["root_causes"] = root_causes_data
             write_json(Path(manifest.outputs["rootcauses_json"]), root_causes_data)
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("recommend"):
-            recommendations_data = build_recommendations(root_causes_data)
+            recommendations_data = run_recommendations(root_causes=root_causes_data)
             compare_data["recommendations"] = recommendations_data
             write_json(Path(manifest.outputs["recommendations_json"]), recommendations_data)
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("ltr"):
-            ltr_impact_data = capture_ltr_impact(replay_data)
+            ltr_impact_data = run_ltr_impact(replay_data=replay_data)
             compare_data["ltr_impact"] = ltr_impact_data
             write_json(Path(manifest.outputs["ltr_impact_json"]), ltr_impact_data)
-            write_json(Path(manifest.outputs["compare_json"]), compare_data)
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+
+        with stage("plugins_execute"):
+            if plugins_runtime is None:
+                compare_data["plugins"] = {"enabled": False, "results": [], "issues": []}
+            else:
+                compare_data["plugins"] = execute_plugins(
+                    runtime=plugins_runtime,
+                    run_id=run_id,
+                    out_dir=out,
+                    changeset_path=changeset_path,
+                    changeset_raw=changeset.raw,
+                    manifest_payload=manifest.to_dict(),
+                    compare_data=compare_data,
+                    replay_data=replay_data,
+                    logger=LOGGER,
+                )
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["plugins_json"]),
+                compare_data["plugins"],
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
 
         with stage("report"):
-            report_data = build_report_json(
-                manifest=manifest.to_dict(),
+            write_report_artifacts(
+                manifest_payload=manifest.to_dict(),
                 compare_data=compare_data,
                 replay_data=replay_data,
+                report_json_path=Path(manifest.outputs["report_json"]),
+                report_html_path=Path(manifest.outputs["report_html"]),
+                template_dir=Path(__file__).parent / "report" / "templates",
+                write_redacted_json=_write_json_maybe_redacted,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
             )
-            write_json(Path(manifest.outputs["report_json"]), report_data)
-            template_dir = Path(__file__).parent / "report" / "templates"
-            html = render_html_report(report_data, template_dir)
-            write_text(Path(manifest.outputs["report_html"]), html)
 
     except Exception as exc:  # noqa: BLE001
         raise StageError(f"run failed: {exc}") from exc
 
     finally:
         with stage("cleanup"):
+            if plugins_runtime is not None:
+                cleanup_plugins(
+                    runtime=plugins_runtime,
+                    run_id=run_id,
+                    out_dir=out,
+                    changeset_path=changeset_path,
+                    changeset_raw=changeset.raw,
+                    manifest_payload=manifest.to_dict(),
+                    logger=LOGGER,
+                )
             if effective_cleanup and shadow_name:
                 try:
                     cleanup_shadow(
@@ -1461,9 +1719,93 @@ def run(
         manifest.stats["duration_seconds"] = round(
             perf_counter() - run_started, 3
         )
-        write_json(Path(manifest.outputs["run_manifest"]), manifest.to_dict())
-        baseline_client.close()
-        shadow_client.close()
+        gov_settings = manifest.settings.get("governance", {})
+        if isinstance(gov_settings, dict) and gov_settings.get("enabled"):
+            finalized_governance = finalize_governance_manifest(
+                manifest_payload=manifest.to_dict(),
+                governance_settings=gov_settings,
+                sign_secret=governance_sign_secret,
+            )
+            manifest.settings["governance"] = finalized_governance
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["governance_json"]),
+                finalized_governance,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+
+        run_failed = any(
+            isinstance(stage_info, dict) and stage_info.get("status") == "failed"
+            for stage_info in manifest.stages.values()
+        )
+        high_risk_percent = float(
+            (compare_data.get("summary", {}) or {}).get("high_risk_percent", 0.0)
+            if isinstance(compare_data, dict)
+            else 0.0
+        )
+        if high_risk_percent > 0:
+            emit_event(
+                "drift_detected",
+                {"high_risk_percent": high_risk_percent},
+            )
+        emit_event(
+            "run_completed",
+            {
+                "status": "failed" if run_failed else "succeeded",
+                "duration_seconds": manifest.stats["duration_seconds"],
+                "queries_run": manifest.stats.get("queries_run", 0),
+            },
+        )
+
+        observability_cfg = observability_runtime.config if observability_runtime is not None else {}
+        compare_data["observability"] = finalize_observability_outputs(
+            observability_runtime=observability_runtime,
+            observability_cfg=observability_cfg,
+            compare_data=compare_data,
+            failed=run_failed,
+            outputs=manifest.outputs,
+        )
+        if isinstance(compare_data, dict) and compare_data:
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+
+        privacy_report_payload, _ = build_and_enforce_privacy_report(
+            out_dir=out,
+            runtime_cfg=privacy_runtime_cfg,
+            persist_sensitive_effective=bool(persist_sensitive_effective),
+        )
+        _write_json_maybe_redacted(
+            Path(manifest.outputs["privacy_json"]),
+            privacy_report_payload,
+            redact=security_redact_artifacts,
+            extra_sensitive_keys=security_extra_sensitive_keys,
+            privacy_cfg=privacy_runtime_cfg,
+        )
+        manifest.settings["privacy"]["report"] = privacy_report_payload
+        compare_data["privacy"] = privacy_report_payload
+        if isinstance(compare_data, dict) and compare_data:
+            _write_json_maybe_redacted(
+                Path(manifest.outputs["compare_json"]),
+                compare_data,
+                redact=security_redact_artifacts,
+                extra_sensitive_keys=security_extra_sensitive_keys,
+            )
+
+        _write_json_maybe_redacted(
+            Path(manifest.outputs["run_manifest"]),
+            manifest.to_dict(),
+            redact=security_redact_artifacts,
+            extra_sensitive_keys=security_extra_sensitive_keys,
+        )
+        _PRIVACY_RUNTIME_CFG = {}
+        if baseline_client is not None:
+            baseline_client.close()
+        if shadow_client is not None:
+            shadow_client.close()
 
     typer.echo(str(Path(manifest.outputs["report_json"])))
     typer.echo(str(Path(manifest.outputs["report_html"])))

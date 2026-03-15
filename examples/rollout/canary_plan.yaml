@@ -1,0 +1,7 @@
+baseline_collection: "products"
+canary_collection: "products_canary"
+traffic_sample_ratio: 0.1
+replay_query_count: 500
+policy_bundle_paths:
+  - "examples/governance/prod_promotion_policy.yaml"
+out: "out/rollout/canary_plan.json"

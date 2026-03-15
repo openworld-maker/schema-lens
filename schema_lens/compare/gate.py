@@ -112,6 +112,18 @@ def _metric_value(
     rule: dict[str, Any],
 ) -> float:
     metric = str(rule.get("metric"))
+    if metric == "pct_high_risk_queries_segment":
+        args = rule.get("args", {})
+        if not isinstance(args, dict):
+            args = {}
+        key = str(args.get("segment_key", ""))
+        value = str(args.get("segment_value", ""))
+        segments = compare_data.get("segments", {})
+        by_segment = segments.get("by_segment", {}) if isinstance(segments, dict) else {}
+        bucket = by_segment.get(f"{key}:{value}", {}) if isinstance(by_segment, dict) else {}
+        if not isinstance(bucket, dict):
+            return 0.0
+        return float(bucket.get("high_risk_percent", 0.0))
     if metric == "pct_queries_overlap_lt":
         threshold = float(rule.get("args", {}).get("threshold", 0.6))
         return _pct_queries_overlap_lt(compare_data, threshold)

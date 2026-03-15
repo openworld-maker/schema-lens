@@ -86,6 +86,30 @@ def build_report_json(
             "ltr_impact",
             {"enabled": False, "reason": "LTR impact not available."},
         ),
+        "compatibility": compare_data.get(
+            "compatibility",
+            manifest.get("settings", {}).get("compatibility", {}),
+        ),
+        "observability": compare_data.get(
+            "observability",
+            {"enabled": False, "reason": "Observability hooks not enabled."},
+        ),
+        "governance": compare_data.get(
+            "governance",
+            manifest.get("settings", {}).get("governance", {"enabled": False}),
+        ),
+        "segments": compare_data.get(
+            "segments",
+            {"enabled": False, "reason": "Segment analysis not generated."},
+        ),
+        "privacy": compare_data.get(
+            "privacy",
+            manifest.get("settings", {}).get("privacy", {"enabled": False}),
+        ),
+        "plugins": compare_data.get(
+            "plugins",
+            {"enabled": False, "results": [], "issues": []},
+        ),
         "vector_hybrid_simulation": compare_data.get("vector_hybrid", {}),
         "hybrid_sensitivity": compare_data.get("hybrid_sensitivity", {}),
         "top_regressions": top_regressions,

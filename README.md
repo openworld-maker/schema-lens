@@ -22,6 +22,16 @@ Current version: `v0.2.0`
 - [CLI reference](#cli-reference)
 - [Changeset reference](#changeset-reference)
 - [Output artifacts](#output-artifacts)
+- [Plugin SDK](#plugin-sdk)
+- [Security Mode](#security-mode)
+- [Solr Compatibility](#solr-compatibility)
+- [API Server Mode](#api-server-mode)
+- [Observability](#observability)
+- [Governance](#governance)
+- [Rollout Orchestration](#rollout-orchestration)
+- [Segment-Aware Analysis](#segment-aware-analysis)
+- [Data Privacy](#data-privacy)
+- [Enterprise Packaging](#enterprise-packaging)
 - [Quality gate and CI usage](#quality-gate-and-ci-usage)
 - [Architecture](#architecture)
 - [Testing](#testing)
@@ -417,6 +427,7 @@ open out/vector_demo/report.html
 - `schema-lens replay --baseline-solr-url ... --baseline-collection ... --shadow-solr-url ... --shadow-collection ... --queries ... --k ... --out ...`
 - `schema-lens compare --replay PATH --k K --out PATH`
 - `schema-lens report --compare PATH --manifest PATH --out DIR`
+- `schema-lens api serve --out out/api --host 127.0.0.1 --port 8090`
 
 ### Shadow lifecycle
 
@@ -441,7 +452,13 @@ open out/vector_demo/report.html
 - `schema-lens compare-env --env1 examples/envs/prod_us.yaml --env2 examples/envs/prod_eu.yaml --queries examples/queries/env_compare_queries.jsonl --out out/env_compare`
 - `schema-lens serve --run out/demo --port 8080`
 - `schema-lens serve --compare out/env_compare/compare.json --port 8080`
+- `schema-lens serve --api-url http://127.0.0.1:8090 --run-id <id> --port 8080`
 - `schema-lens monitor --baseline-snapshot out/demo --queries examples/queries/env_compare_queries.jsonl --out out/monitor`
+- `schema-lens rollout git-drift --solr-url URL --collection NAME --local-configset-dir DIR --out drift.json`
+- `schema-lens rollout canary-plan --baseline-collection NAME --canary-collection NAME --out canary_plan.json`
+- `schema-lens rollout alias-swap-plan --alias NAME --from-collection SRC --to-collection DST --out alias_plan.json [--execute --solr-url URL]`
+- `schema-lens rollout rollback-plan --alias NAME --previous-collection SRC --out rollback_plan.json`
+- `schema-lens rollout verify-post-cutover --canary-compare canary_compare.json --prod-compare prod_compare.json --out verify.json`
 
 ## Changeset reference
 
@@ -466,6 +483,7 @@ A full `run` emits a reproducible bundle under `--out`:
 - `snapshot.system.json`
 - `snapshot.collection.json`
 - `snapshot.hash.txt`
+- `compat.json`
 - `schema_risk.json`
 - `shadow.json`
 - `docs_sample.jsonl` (when Solr doc sampling enabled)
@@ -476,16 +494,397 @@ A full `run` emits a reproducible bundle under `--out`:
 - `vector_validation.json` (when vector enabled)
 - `hybrid_sensitivity.json` (when enabled)
 - `perf_metrics.json` (when performance enabled)
+- `segments.json` (when segment analysis enabled)
 - `rootcauses.json`
 - `recommendations.json`
 - `env_compare.json` (for `compare-env`)
 - `ltr_impact.json`
+- `audit.json` (security profile + auth mode trail)
+- `governance.json` (approval/promotion/exception/signing metadata)
+- `privacy.json` (masking, suppression, retention summary)
+- `observability_events.jsonl` / `otel_spans.json` / `webhook_deliveries.json` (when enabled)
+- `prometheus_metrics.prom` (when Prometheus export enabled)
+- `plugins.json` (when plugin SDK is enabled)
 - `latest_monitor.json` / `monitor_history.jsonl` (for `monitor`)
 - `report.json`
 - `report.html`
 
 `compare.json` and reports include additive sections for rewrite impact, vector/hybrid simulation,
 performance, root-cause analysis, recommendations, environment drift, and LTR when available.
+
+## Plugin SDK
+
+Plugin support is optional and config-driven. Enable it in the changeset:
+
+```yaml
+plugins:
+  enabled: true
+  strict: false
+  config: ./examples/plugins/plugins_runtime.yaml
+```
+
+Supported extension-point contracts include auth, query/doc source, replay executor, diff analyzer,
+gate evaluator, report widget/renderer, observability exporter, and rollout provider.
+
+Plugin loading supports:
+
+- Python entry points (`schema_lens.plugins`)
+- Local plugin paths (`plugins.paths`)
+- Explicit enable/disable lists
+
+Lifecycle hooks:
+
+1. `validate()`
+2. `initialize()`
+3. `execute()`
+4. `cleanup()`
+
+Compatibility/versioning policy:
+
+- Plugins declare `schema_lens_version` in metadata.
+- Incompatible plugins are skipped and reported in `plugins.json`.
+- `plugins.strict: true` turns plugin load/compat/execute errors into run-blocking failures.
+
+Developer guide and examples:
+
+- [docs/plugin-sdk.md](docs/plugin-sdk.md)
+- `examples/plugins/sample_query_source/`
+- `examples/plugins/sample_gate/`
+- `examples/plugins/sample_report_widget/`
+
+## Security Mode
+
+Security controls are optional and backward compatible. Configure under `security` in a changeset:
+
+```yaml
+security:
+  profile: enterprise-safe
+  baseline_auth:
+    type: basic
+    username_env: SCHEMA_LENS_SOLR_USER
+    password_env: SCHEMA_LENS_SOLR_PASSWORD
+  shadow_auth:
+    type: bearer
+    token_env: SCHEMA_LENS_SOLR_TOKEN
+  audit:
+    requested_by: "user@example.com"
+    approval_reference: "CR-12345"
+```
+
+Supported auth modes:
+
+- `none`
+- `basic` (inline, `_env`, `_file`)
+- `bearer` (inline, `_env`, `_file`)
+- `mtls` (`cert_file`, optional `key_file`, optional `ca_file`)
+- `plugin` / `kerberos` (via auth provider plugin)
+
+Security profiles:
+
+- `local-dev`
+- `enterprise-safe`
+- `no-persist-sensitive`
+- `redacted-artifacts-only`
+
+Behavior:
+
+- secrets are redacted from `run_manifest.json`, `compare.json`, and `report.json` when redaction is enabled
+- `Authorization` headers are always masked in stored payloads
+- `audit.json` records requester, approval reference, target cluster/collection, and auth mode (never secret values)
+
+Examples:
+
+- `examples/security/basic_auth_env.yaml`
+- `examples/security/bearer_token_env.yaml`
+- `examples/security/mtls_config.yaml`
+
+## Solr Compatibility
+
+`schema-lens` detects Solr version from `/admin/info/system` and records capabilities in
+`compat.json` and `run_manifest.json`.
+
+Supported compatibility targets:
+
+- Solr `8.x`
+- Solr `9.x`
+- Solr `10.x`
+
+Capability-driven fallbacks:
+
+- vector/hybrid simulation is skipped when `vector_query_supported=false`
+- structured explain falls back to classic explain when unsupported
+- performance metrics capture is disabled when metrics capability is unavailable
+
+Reference fixtures:
+
+- `examples/compat/solr8_system_info.json`
+- `examples/compat/solr9_system_info.json`
+- `examples/compat/solr10_system_info.json`
+
+## API Server Mode
+
+Run a local-first REST service:
+
+```bash
+schema-lens api serve --out out/api --host 127.0.0.1 --port 8090
+```
+
+Core endpoints:
+
+- `POST /runs`
+- `GET /runs/{id}`
+- `GET /runs/{id}/artifacts`
+- `GET /runs/{id}/artifacts/{name}`
+- `GET /dashboard/runs`
+- `GET /dashboard/runs/{id}/overview`
+- `GET /dashboard/runs/{id}/query-explorer`
+- `POST /compare-env`
+- `POST /gate`
+- `GET /health`
+- `GET /capabilities`
+
+Create a run:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8090/runs \
+  -H "content-type: application/json" \
+  -d @examples/api/create_run_payload.json
+```
+
+Compare environments:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8090/compare-env \
+  -H "content-type: application/json" \
+  -d @examples/api/compare_env_payload.json
+```
+
+Upload-style submission is supported by including `changeset_file_content` and optional
+`changeset_file_name` in the JSON payload.
+
+Dashboard integration:
+
+```bash
+schema-lens serve --api-url http://127.0.0.1:8090 --run-id <run-id> --port 8080
+```
+
+Local-first security:
+
+- service defaults to local-only mode
+- auth middleware hooks can be layered in via app factory wiring
+- secrets are handled by existing security/redaction settings in run execution
+
+## Observability
+
+Enable runtime observability in changeset config:
+
+```yaml
+observability:
+  enabled: true
+  prometheus:
+    enabled: true
+  otel:
+    enabled: true
+  webhooks:
+    enabled: true
+    urls:
+      - "http://localhost:9000/schema-lens/events"
+```
+
+Runtime events emitted:
+
+- `run_started`
+- `run_completed`
+- `drift_detected`
+- `gate_failed` (reserved for gate workflows)
+
+Prometheus output includes:
+
+- `schema_lens_runs_total`
+- `schema_lens_runs_failed_total`
+- `schema_lens_high_risk_queries_total`
+- `schema_lens_gate_failures_total`
+- `schema_lens_p95_latency_regression_pct`
+- `schema_lens_cache_eviction_regression_pct`
+
+Examples:
+
+- `examples/observability/prometheus_config.md`
+- `examples/observability/webhook_payload.json`
+- `examples/observability/grafana_dashboard.json`
+
+## Governance
+
+Governance is optional and policy-driven:
+
+```yaml
+governance:
+  enabled: true
+  approval:
+    requested_by: "search-platform@example.com"
+    ticket_id: "REL-421"
+  promotion_state: "stage" # dev|stage|prod_candidate|prod_approved
+  policy_bundles:
+    - "./examples/governance/prod_promotion_policy.yaml"
+  exceptions:
+    - id: "ex-2026-001"
+      rationale: "Temporary rollout exception"
+      expiry: "2026-12-31T23:59:59Z"
+  signing:
+    enabled: true
+    secret_env: "SCHEMA_LENS_GOV_SIGNING_KEY"
+```
+
+Behavior:
+
+- validates approval metadata and promotion state
+- validates exception records with expiry tracking
+- merges reusable policy bundles for downstream gate workflows
+- writes `governance.json`
+- records `manifest_hash` and optional `signature` in manifest governance settings
+
+Examples:
+
+- `examples/governance/prod_promotion_policy.yaml`
+- `examples/governance/approval_metadata.json`
+- `examples/governance/exception_record.json`
+
+## Rollout Orchestration
+
+Rollout tooling is dry-run by default and emits deterministic JSON plans.
+
+Supported flows:
+
+- Git configset drift detection against live cluster
+- canary rollout checklist generation
+- alias swap plan generation
+- rollback plan generation
+- post-cutover verify checks
+
+Example commands:
+
+```bash
+schema-lens rollout git-drift \
+  --solr-url http://localhost:8983/solr \
+  --collection products \
+  --local-configset-dir examples/configsets/procurement_v1 \
+  --out out/rollout/git_drift.json
+
+schema-lens rollout canary-plan \
+  --baseline-collection products \
+  --canary-collection products_canary \
+  --traffic-sample-ratio 0.1 \
+  --replay-query-count 500 \
+  --out out/rollout/canary_plan.json
+
+schema-lens rollout alias-swap-plan \
+  --alias products_live \
+  --from-collection products_v1 \
+  --to-collection products_v2 \
+  --out out/rollout/alias_swap_plan.json
+```
+
+Execute mode is opt-in and explicitly dangerous:
+
+- `schema-lens rollout alias-swap-plan ... --execute --solr-url URL`
+
+Examples:
+
+- `examples/rollout/git_configset_compare.yaml`
+- `examples/rollout/canary_plan.yaml`
+- `examples/rollout/alias_swap_plan.json`
+
+## Segment-Aware Analysis
+
+Schema-lens can aggregate replay/compare impact by segment keys such as:
+
+- `tenant`
+- `region`
+- `locale`
+- `catalog`
+- arbitrary labels in `segment` metadata
+
+Use segmented query input (JSONL):
+
+- `examples/queries/multitenant_queries.jsonl`
+
+Optional segment config in changeset:
+
+```yaml
+segments:
+  enabled: true
+  keys: ["tenant", "region", "locale", "catalog"]
+  policy:
+    rules:
+      - segment_key: tenant
+        segment_value: acme
+        metric: high_risk_percent
+        op: ">"
+        value: 10
+        severity: fail
+```
+
+Outputs:
+
+- `segments.json` with `by_segment`, `top_impacted`, and policy evaluation
+- `compare.json.segments`
+- `report.json.segments`
+
+Example policy:
+
+- `examples/policy/tenant_specific_policy.yaml`
+
+## Data Privacy
+
+Privacy controls are optional and deterministic.
+
+```yaml
+privacy:
+  profile: export-safe # off | default | export-safe
+  allowlist: ["summary", "diffs", "top_regressions"]
+  denylist: ["raw_docs", "request_headers"]
+  no_persist_sensitive: true
+  hash_salt: "internal-salt"
+```
+
+Capabilities:
+
+- email masking
+- UUID masking
+- numeric ID hashing
+- allowlist/denylist filtering
+- raw sample suppression via profile
+- retention pruning for sensitive artifacts
+
+Outputs:
+
+- `privacy.json`
+- redacted `compare.json` / `report.json` / `run_manifest.json` when enabled
+
+Examples:
+
+- `examples/privacy/pii_masking_profile.yaml`
+- `examples/privacy/export_safe_mode.yaml`
+
+## Enterprise Packaging
+
+Distribution targets included:
+
+- Python package (build with `python -m build`)
+- Docker image (`docker/Dockerfile`)
+- Helm chart (`helm/schema-lens`)
+- release workflow (`.github/workflows/release.yml`)
+
+Release scripts:
+
+- `scripts/release/build_release.sh` (build + checksum + SBOM placeholder)
+- `scripts/release/verify_reproducibility.sh` (checksum verification)
+
+Deployment examples:
+
+- `examples/deploy/docker_run.md`
+- `examples/deploy/k8s_job.yaml`
+- `examples/deploy/github_actions.yml`
 
 ## Quality gate and CI usage
 
