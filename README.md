@@ -569,6 +569,9 @@ End-to-end smoke coverage currently exists for:
 - rewrite diff workflow
 - vector/hybrid workflow
 - smoke-matrix orchestration
+- environment compare workflow
+- monitor workflow
+- serve dashboard workflow
 
 These are covered by:
 
@@ -576,13 +579,11 @@ These are covered by:
 - `tests/integration/test_rewrite_diff_smoke.py`
 - `tests/integration/test_vector_hybrid_smoke.py`
 - `tests/integration/test_smoke_matrix.py`
+- `tests/integration/test_ops_commands_smoke.py`
 
 Additional feature tracks are implemented and have unit/CLI coverage, but do not yet all have
 their own dedicated Docker-backed end-to-end tests:
 
-- `compare-env`
-- `serve`
-- `monitor`
 - performance analysis
 - root-cause analysis
 - recommendations

@@ -332,6 +332,9 @@ Dedicated Docker-backed integration coverage currently exists for:
 - rewrite-diff smoke path
 - vector/hybrid smoke path
 - smoke-matrix target
+- environment compare smoke path
+- monitor smoke path
+- serve dashboard smoke path
 
 Files:
 
@@ -339,6 +342,7 @@ Files:
 - `tests/integration/test_rewrite_diff_smoke.py`
 - `tests/integration/test_vector_hybrid_smoke.py`
 - `tests/integration/test_smoke_matrix.py`
+- `tests/integration/test_ops_commands_smoke.py`
 
 This means the core workflows are exercised end-to-end.
 
@@ -346,9 +350,6 @@ Not every newer feature has its own dedicated end-to-end smoke yet. The followin
 documented, and unit-tested, but should be treated as not yet fully end-to-end covered by a
 feature-specific Docker smoke:
 
-- `compare-env`
-- `serve`
-- `monitor`
 - performance analysis
 - root-cause analysis
 - recommendations
