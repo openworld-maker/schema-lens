@@ -1,0 +1,8 @@
+{
+  "env1_path": "examples/envs/prod_us.yaml",
+  "env2_path": "examples/envs/prod_eu.yaml",
+  "queries_path": "examples/queries/env_compare_queries.jsonl",
+  "query_format": "jsonl",
+  "k": 10,
+  "max_queries": 200
+}

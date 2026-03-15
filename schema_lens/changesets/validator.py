@@ -10,6 +10,21 @@ from schema_lens.changesets.model import Changeset
 from schema_lens.changesets.operations import SUPPORTED_OPS
 
 CONFIGSET_UPDATE_MODES = {"replace", "patch_append", "patch_merge"}
+VECTOR_SCENARIO_MODES = {"lexical_only", "vector_only", "hybrid"}
+VECTOR_SIMILARITIES = {"cosine", "dot", "euclidean"}
+VECTOR_QUERY_VECTOR_POLICIES = {"skip", "fail"}
+VECTOR_BLEND_METHODS = {"linear", "normalize_linear", "rrf"}
+VECTOR_BLEND_EXECUTION = {"auto", "client", "solr_native"}
+VECTOR_NORMALIZE = {"none", "minmax", "zscore"}
+SECURITY_PROFILES = {
+    "local-dev",
+    "enterprise-safe",
+    "no-persist-sensitive",
+    "redacted-artifacts-only",
+}
+SECURITY_AUTH_TYPES = {"none", "basic", "bearer", "mtls", "plugin", "kerberos"}
+GOV_PROMOTION_STATES = {"dev", "stage", "prod_candidate", "prod_approved"}
+PRIVACY_PROFILES = {"off", "default", "export-safe"}
 
 
 @dataclass
@@ -130,6 +145,186 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
             if field_val is not None and not isinstance(field_val, bool):
                 report.errors.append(f"replay.capture.{field_name} must be boolean")
 
+    performance = raw.get("performance")
+    if performance is not None and not isinstance(performance, dict):
+        report.errors.append("performance must be an object")
+        performance = {}
+    if isinstance(performance, dict):
+        enabled = performance.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("performance.enabled must be boolean")
+        warmup = performance.get("warmup")
+        if warmup is not None and not isinstance(warmup, dict):
+            report.errors.append("performance.warmup must be an object")
+        capture = performance.get("capture")
+        if capture is not None and not isinstance(capture, dict):
+            report.errors.append("performance.capture must be an object")
+        if isinstance(capture, dict):
+            percentiles = capture.get("percentiles")
+            if percentiles is not None:
+                if not isinstance(percentiles, list) or not all(
+                    isinstance(item, int) for item in percentiles
+                ):
+                    report.errors.append("performance.capture.percentiles must be a list of ints")
+        caches = performance.get("caches")
+        if caches is not None and not isinstance(caches, dict):
+            report.errors.append("performance.caches must be an object")
+
+    security = raw.get("security")
+    if security is not None and not isinstance(security, dict):
+        report.errors.append("security must be an object")
+        security = {}
+    if isinstance(security, dict):
+        profile = security.get("profile")
+        if profile is not None and str(profile) not in SECURITY_PROFILES:
+            report.errors.append(
+                f"security.profile must be one of {sorted(SECURITY_PROFILES)}"
+            )
+        for auth_field in ("baseline_auth", "shadow_auth"):
+            auth_cfg = security.get(auth_field)
+            if auth_cfg is not None and not isinstance(auth_cfg, dict):
+                report.errors.append(f"security.{auth_field} must be an object")
+                continue
+            if isinstance(auth_cfg, dict):
+                auth_type = str(auth_cfg.get("type", "none")).lower()
+                if auth_type not in SECURITY_AUTH_TYPES:
+                    report.errors.append(
+                        f"security.{auth_field}.type must be one of {sorted(SECURITY_AUTH_TYPES)}"
+                    )
+                if auth_type == "basic":
+                    if not any(auth_cfg.get(name) for name in ("username", "username_env", "username_file")):
+                        report.errors.append(
+                            f"security.{auth_field} basic auth requires username or *_env/*_file"
+                        )
+                    if not any(auth_cfg.get(name) for name in ("password", "password_env", "password_file")):
+                        report.errors.append(
+                            f"security.{auth_field} basic auth requires password or *_env/*_file"
+                        )
+                if auth_type == "bearer" and not any(
+                    auth_cfg.get(name) for name in ("token", "token_env", "token_file")
+                ):
+                    report.errors.append(
+                        f"security.{auth_field} bearer auth requires token or *_env/*_file"
+                    )
+                if auth_type in {"plugin", "kerberos"} and not auth_cfg.get("provider"):
+                    report.errors.append(
+                        f"security.{auth_field} {auth_type} auth requires provider plugin name"
+                    )
+
+    observability = raw.get("observability")
+    if observability is not None and not isinstance(observability, dict):
+        report.errors.append("observability must be an object")
+        observability = {}
+    if isinstance(observability, dict):
+        enabled = observability.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("observability.enabled must be boolean")
+        prometheus = observability.get("prometheus")
+        if prometheus is not None and not isinstance(prometheus, dict):
+            report.errors.append("observability.prometheus must be an object")
+        elif isinstance(prometheus, dict):
+            p_enabled = prometheus.get("enabled")
+            if p_enabled is not None and not isinstance(p_enabled, bool):
+                report.errors.append("observability.prometheus.enabled must be boolean")
+        otel = observability.get("otel")
+        if otel is not None and not isinstance(otel, dict):
+            report.errors.append("observability.otel must be an object")
+        elif isinstance(otel, dict):
+            o_enabled = otel.get("enabled")
+            if o_enabled is not None and not isinstance(o_enabled, bool):
+                report.errors.append("observability.otel.enabled must be boolean")
+        webhooks = observability.get("webhooks")
+        if webhooks is not None and not isinstance(webhooks, dict):
+            report.errors.append("observability.webhooks must be an object")
+        elif isinstance(webhooks, dict):
+            w_enabled = webhooks.get("enabled")
+            if w_enabled is not None and not isinstance(w_enabled, bool):
+                report.errors.append("observability.webhooks.enabled must be boolean")
+            urls = webhooks.get("urls")
+            if urls is not None and (
+                not isinstance(urls, list) or not all(isinstance(item, str) for item in urls)
+            ):
+                report.errors.append("observability.webhooks.urls must be a list of strings")
+
+    governance = raw.get("governance")
+    if governance is not None and not isinstance(governance, dict):
+        report.errors.append("governance must be an object")
+        governance = {}
+    if isinstance(governance, dict):
+        enabled = governance.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("governance.enabled must be boolean")
+        approval = governance.get("approval")
+        if approval is not None and not isinstance(approval, dict):
+            report.errors.append("governance.approval must be an object")
+        if bool(enabled):
+            if not isinstance(approval, dict) or not str(approval.get("requested_by", "")).strip():
+                report.errors.append(
+                    "governance.approval.requested_by is required when governance.enabled=true"
+                )
+        promotion_state = governance.get("promotion_state")
+        if promotion_state is not None and str(promotion_state) not in GOV_PROMOTION_STATES:
+            report.errors.append(
+                f"governance.promotion_state must be one of {sorted(GOV_PROMOTION_STATES)}"
+            )
+        exceptions = governance.get("exceptions")
+        if exceptions is not None and not isinstance(exceptions, list):
+            report.errors.append("governance.exceptions must be a list")
+        bundles = governance.get("policy_bundles")
+        if bundles is not None and (
+            not isinstance(bundles, list) or not all(isinstance(item, str) for item in bundles)
+        ):
+            report.errors.append("governance.policy_bundles must be a list of strings")
+        signing = governance.get("signing")
+        if signing is not None and not isinstance(signing, dict):
+            report.errors.append("governance.signing must be an object")
+        if isinstance(signing, dict):
+            s_enabled = signing.get("enabled")
+            if s_enabled is not None and not isinstance(s_enabled, bool):
+                report.errors.append("governance.signing.enabled must be boolean")
+            if bool(s_enabled) and not any(
+                signing.get(key) for key in ("secret", "secret_env")
+            ):
+                report.errors.append(
+                    "governance.signing requires secret or secret_env when enabled=true"
+                )
+
+    segments = raw.get("segments")
+    if segments is not None and not isinstance(segments, dict):
+        report.errors.append("segments must be an object")
+        segments = {}
+    if isinstance(segments, dict):
+        enabled = segments.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("segments.enabled must be boolean")
+        keys = segments.get("keys")
+        if keys is not None and (
+            not isinstance(keys, list) or not all(isinstance(item, str) for item in keys)
+        ):
+            report.errors.append("segments.keys must be a list of strings")
+        policy = segments.get("policy")
+        if policy is not None and not isinstance(policy, dict):
+            report.errors.append("segments.policy must be an object")
+
+    privacy = raw.get("privacy")
+    if privacy is not None and not isinstance(privacy, dict):
+        report.errors.append("privacy must be an object")
+        privacy = {}
+    if isinstance(privacy, dict):
+        profile = privacy.get("profile")
+        if profile is not None and str(profile) not in PRIVACY_PROFILES:
+            report.errors.append(f"privacy.profile must be one of {sorted(PRIVACY_PROFILES)}")
+        for key in ("allowlist", "denylist"):
+            values = privacy.get(key)
+            if values is not None and (
+                not isinstance(values, list) or not all(isinstance(item, str) for item in values)
+            ):
+                report.errors.append(f"privacy.{key} must be a list of strings")
+        for key in ("no_persist_sensitive",):
+            value = privacy.get(key)
+            if value is not None and not isinstance(value, bool):
+                report.errors.append(f"privacy.{key} must be boolean")
+
     rewrite_diff = _get_in(raw, "evaluation.rewrite_diff")
     if rewrite_diff is not None and not isinstance(rewrite_diff, dict):
         report.errors.append("evaluation.rewrite_diff must be an object")
@@ -153,6 +348,159 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         always_for_high_risk = rewrite_diff.get("always_for_high_risk")
         if always_for_high_risk is not None and not isinstance(always_for_high_risk, bool):
             report.errors.append("evaluation.rewrite_diff.always_for_high_risk must be boolean")
+
+    vector_cfg = raw.get("vector")
+    if vector_cfg is not None and not isinstance(vector_cfg, dict):
+        report.errors.append("vector must be an object")
+        vector_cfg = {}
+    if isinstance(vector_cfg, dict):
+        enabled = vector_cfg.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("vector.enabled must be boolean")
+
+        if vector_cfg.get("enabled"):
+            field = vector_cfg.get("field")
+            if not isinstance(field, str) or not field.strip():
+                report.errors.append("vector.field is required when vector.enabled=true")
+
+            dimension = vector_cfg.get("dimension")
+            if dimension is not None:
+                try:
+                    if int(dimension) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    report.errors.append("vector.dimension must be an integer > 0")
+
+            similarity = vector_cfg.get("similarity")
+            if similarity is not None and similarity not in VECTOR_SIMILARITIES:
+                report.errors.append(
+                    f"vector.similarity must be one of {sorted(VECTOR_SIMILARITIES)}"
+                )
+
+            qv_policy = vector_cfg.get("query_vector_policy")
+            if qv_policy is not None and qv_policy not in VECTOR_QUERY_VECTOR_POLICIES:
+                report.errors.append(
+                    "vector.query_vector_policy must be one of ['fail', 'skip']"
+                )
+
+            embedding_source = vector_cfg.get("embedding_source", {})
+            if embedding_source is not None and not isinstance(embedding_source, dict):
+                report.errors.append("vector.embedding_source must be an object")
+                embedding_source = {}
+            if isinstance(embedding_source, dict):
+                source_type = str(embedding_source.get("type", "none"))
+                if source_type not in {"file", "none"}:
+                    report.errors.append("vector.embedding_source.type must be 'file' or 'none'")
+                if source_type == "file":
+                    if (
+                        not isinstance(embedding_source.get("path"), str)
+                        or not embedding_source.get("path")
+                    ):
+                        report.errors.append(
+                            "vector.embedding_source.path is required when type=file"
+                        )
+
+            scenarios = vector_cfg.get("scenarios")
+            if not isinstance(scenarios, list) or not scenarios:
+                report.errors.append("vector.scenarios must be a non-empty list when enabled")
+            else:
+                seen_names: set[str] = set()
+                for idx, scenario in enumerate(scenarios):
+                    loc = f"vector.scenarios[{idx}]"
+                    if not isinstance(scenario, dict):
+                        report.errors.append(f"{loc} must be an object")
+                        continue
+                    name = scenario.get("name")
+                    if not isinstance(name, str) or not name.strip():
+                        report.errors.append(f"{loc}.name is required")
+                    elif name in seen_names:
+                        report.errors.append(f"{loc}.name must be unique (duplicate: {name})")
+                    else:
+                        seen_names.add(name)
+
+                    mode = scenario.get("mode")
+                    if mode not in VECTOR_SCENARIO_MODES:
+                        report.errors.append(
+                            f"{loc}.mode must be one of {sorted(VECTOR_SCENARIO_MODES)}"
+                        )
+                        continue
+
+                    if mode in {"vector_only", "hybrid"}:
+                        knn = scenario.get("knn")
+                        if not isinstance(knn, dict):
+                            report.errors.append(f"{loc}.knn must be an object")
+                        else:
+                            for key in ("k", "topK"):
+                                value = knn.get(key)
+                                if value is not None:
+                                    try:
+                                        if int(value) <= 0:
+                                            raise ValueError
+                                    except (TypeError, ValueError):
+                                        report.errors.append(f"{loc}.knn.{key} must be integer > 0")
+                    if mode == "hybrid":
+                        blend = scenario.get("blend")
+                        if not isinstance(blend, dict):
+                            report.errors.append(f"{loc}.blend must be an object")
+                        else:
+                            method = blend.get("method")
+                            if method is not None and method not in VECTOR_BLEND_METHODS:
+                                report.errors.append(
+                                    f"{loc}.blend.method must be one of "
+                                    f"{sorted(VECTOR_BLEND_METHODS)}"
+                                )
+                            execution = blend.get("execution")
+                            if execution is not None and execution not in VECTOR_BLEND_EXECUTION:
+                                report.errors.append(
+                                    f"{loc}.blend.execution must be one of "
+                                    f"{sorted(VECTOR_BLEND_EXECUTION)}"
+                                )
+                            normalize = blend.get("normalize")
+                            if normalize is not None and normalize not in VECTOR_NORMALIZE:
+                                report.errors.append(
+                                    f"{loc}.blend.normalize must be one of "
+                                    f"{sorted(VECTOR_NORMALIZE)}"
+                                )
+
+    vector_eval = _get_in(raw, "evaluation.vector_hybrid")
+    if vector_eval is not None and not isinstance(vector_eval, dict):
+        report.errors.append("evaluation.vector_hybrid must be an object")
+        vector_eval = {}
+    if isinstance(vector_eval, dict):
+        enabled = vector_eval.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("evaluation.vector_hybrid.enabled must be boolean")
+        for key in ("topK", "candidate_pool"):
+            value = vector_eval.get(key)
+            if value is not None:
+                try:
+                    if int(value) <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    report.errors.append(f"evaluation.vector_hybrid.{key} must be integer > 0")
+
+        sensitivity = vector_eval.get("sensitivity")
+        if sensitivity is not None and not isinstance(sensitivity, dict):
+            report.errors.append("evaluation.vector_hybrid.sensitivity must be an object")
+        if isinstance(sensitivity, dict):
+            enabled = sensitivity.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                report.errors.append("evaluation.vector_hybrid.sensitivity.enabled must be boolean")
+            weights = sensitivity.get("weights")
+            if weights is not None:
+                if not isinstance(weights, list) or not weights:
+                    report.errors.append(
+                        "evaluation.vector_hybrid.sensitivity.weights must be a non-empty list"
+                    )
+                else:
+                    for idx, value in enumerate(weights):
+                        try:
+                            float(value)
+                        except (TypeError, ValueError):
+                            report.errors.append(
+                                "evaluation.vector_hybrid.sensitivity.weights"
+                                f"[{idx}] must be numeric"
+                            )
 
     changes = raw.get("changes", [])
     if not isinstance(changes, list):
@@ -250,6 +598,13 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         path_entries = [("queries.source.path", queries_path)]
         if docs_path is not None:
             path_entries.append(("data.docs_source.path", docs_path))
+        vector_embedding_path = _get_in(raw, "vector.embedding_source.path")
+        vector_embedding_type = _get_in(raw, "vector.embedding_source.type")
+        if (
+            isinstance(vector_embedding_path, str)
+            and str(vector_embedding_type or "none") == "file"
+        ):
+            path_entries.append(("vector.embedding_source.path", vector_embedding_path))
         for label, p in path_entries:
             if isinstance(p, str):
                 fp = _resolve_input_path(changeset.path, p)

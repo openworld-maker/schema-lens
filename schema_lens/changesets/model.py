@@ -43,3 +43,7 @@ class Changeset:
     @property
     def replay(self) -> dict[str, Any]:
         return self.raw.get("replay", {})
+
+    @property
+    def vector(self) -> dict[str, Any]:
+        return self.raw.get("vector", {})

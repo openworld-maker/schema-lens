@@ -43,10 +43,56 @@ def _collect_metrics(compare_data: dict[str, Any]) -> dict[str, float]:
         avg_overlap = float(summary.get("avg_overlap", 0.0))
         avg_overlap_ratio = avg_overlap / max(k, 1)
 
+    performance = compare_data.get("performance", {})
+    perf_overall = performance.get("overall", {}) if isinstance(performance, dict) else {}
+    latency_base = (
+        perf_overall.get("baseline_client_latency_ms", {})
+        if isinstance(perf_overall.get("baseline_client_latency_ms"), dict)
+        else {}
+    )
+    latency_shadow = (
+        perf_overall.get("shadow_client_latency_ms", {})
+        if isinstance(perf_overall.get("shadow_client_latency_ms"), dict)
+        else {}
+    )
+    qtime_base = (
+        perf_overall.get("baseline_qtime_ms", {})
+        if isinstance(perf_overall.get("baseline_qtime_ms"), dict)
+        else {}
+    )
+    qtime_shadow = (
+        perf_overall.get("shadow_qtime_ms", {})
+        if isinstance(perf_overall.get("shadow_qtime_ms"), dict)
+        else {}
+    )
+    caches = performance.get("caches", {}) if isinstance(performance, dict) else {}
+    filter_cache = caches.get("filterCache", {}) if isinstance(caches, dict) else {}
+    evictions = filter_cache.get("evictions", {}) if isinstance(filter_cache, dict) else {}
+    index_delta = (
+        performance.get("index", {}).get("delta", {}).get("indexSizeBytes", {})
+        if isinstance(performance.get("index"), dict)
+        else {}
+    )
+
+    def pct_change(base: float, shadow: float) -> float:
+        if not base:
+            return 0.0
+        return (shadow - base) / base * 100.0
+
     return {
         "avg_overlap": float(avg_overlap_ratio),
         "pct_high_risk_queries": float(summary.get("high_risk_percent", high / total * 100.0)),
         "pct_med_risk_queries": float(medium / total * 100.0),
+        "p95_latency_regression_pct": pct_change(
+            float(latency_base.get("p95", 0.0) or 0.0),
+            float(latency_shadow.get("p95", 0.0) or 0.0),
+        ),
+        "p95_qtime_regression_pct": pct_change(
+            float(qtime_base.get("p95", 0.0) or 0.0),
+            float(qtime_shadow.get("p95", 0.0) or 0.0),
+        ),
+        "cache_eviction_regression_pct": float(evictions.get("delta_pct", 0.0) or 0.0),
+        "index_size_regression_pct": float(index_delta.get("delta_pct", 0.0) or 0.0),
         "_k": float(k),
     }
 
@@ -66,6 +112,18 @@ def _metric_value(
     rule: dict[str, Any],
 ) -> float:
     metric = str(rule.get("metric"))
+    if metric == "pct_high_risk_queries_segment":
+        args = rule.get("args", {})
+        if not isinstance(args, dict):
+            args = {}
+        key = str(args.get("segment_key", ""))
+        value = str(args.get("segment_value", ""))
+        segments = compare_data.get("segments", {})
+        by_segment = segments.get("by_segment", {}) if isinstance(segments, dict) else {}
+        bucket = by_segment.get(f"{key}:{value}", {}) if isinstance(by_segment, dict) else {}
+        if not isinstance(bucket, dict):
+            return 0.0
+        return float(bucket.get("high_risk_percent", 0.0))
     if metric == "pct_queries_overlap_lt":
         threshold = float(rule.get("args", {}).get("threshold", 0.6))
         return _pct_queries_overlap_lt(compare_data, threshold)

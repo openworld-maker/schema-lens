@@ -1,0 +1,10 @@
+name: "prod_us"
+solr_url: "http://localhost:8983/solr"
+collection: "products"
+request_defaults:
+  defType: "edismax"
+  rows: 10
+  fl: "id,score"
+headers:
+  X-Region: "us"
+notes: "Example production-like US cluster configuration."

@@ -105,3 +105,30 @@ golden_queries:
     result = evaluate_gate(compare_data=_compare_payload(), policy_data=policy, policy_dir=tmp_path)
     assert result["pass"] is True
     assert result["golden"]["results"][0]["status"] == "SKIP"
+
+
+def test_gate_segment_metric(tmp_path: Path):
+    policy_path = tmp_path / "policy.yaml"
+    policy_path.write_text(
+        """
+version: 1
+fail:
+  - metric: pct_high_risk_queries_segment
+    op: ">"
+    value: 10
+    args:
+      segment_key: tenant
+      segment_value: t1
+""",
+        encoding="utf-8",
+    )
+    payload = _compare_payload()
+    payload["segments"] = {
+        "by_segment": {
+            "tenant:t1": {"high_risk_percent": 50.0}
+        }
+    }
+    policy = load_gate_policy(policy_path)
+    result = evaluate_gate(compare_data=payload, policy_data=policy, policy_dir=tmp_path)
+    assert result["pass"] is False
+    assert result["failed_rules"]

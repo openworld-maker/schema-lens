@@ -6,7 +6,7 @@ It runs a change plan against a shadow collection, replays baseline vs shadow qu
 ranking/facet/filter/sort deltas, captures optional explain + rewrite debug diffs, and emits
 reproducible JSON/HTML artifacts for human review and CI gates.
 
-Current version: `v0.1.3`
+Current version: `v0.2.0`
 
 ## Table of contents
 
@@ -15,12 +15,25 @@ Current version: `v0.1.3`
 - [Advanced features](#advanced-features)
 - [End-to-end flow](#end-to-end-flow)
 - [Requirements](#requirements)
+- [Usage guide](#usage-guide)
 - [Quickstart (basic)](#quickstart-basic)
 - [Quickstart (synonym rewrite impact)](#quickstart-synonym-rewrite-impact)
+- [Quickstart (vector and hybrid simulation)](#quickstart-vector-and-hybrid-simulation)
 - [CLI reference](#cli-reference)
 - [Changeset reference](#changeset-reference)
 - [Output artifacts](#output-artifacts)
+- [Plugin SDK](#plugin-sdk)
+- [Security Mode](#security-mode)
+- [Solr Compatibility](#solr-compatibility)
+- [API Server Mode](#api-server-mode)
+- [Observability](#observability)
+- [Governance](#governance)
+- [Rollout Orchestration](#rollout-orchestration)
+- [Segment-Aware Analysis](#segment-aware-analysis)
+- [Data Privacy](#data-privacy)
+- [Enterprise Packaging](#enterprise-packaging)
 - [Quality gate and CI usage](#quality-gate-and-ci-usage)
+- [Architecture](#architecture)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Safety notes](#safety-notes)
@@ -71,6 +84,14 @@ way to answer:
     - `REWRITE_CLAUSE_SPIKE`
     - `SYNONYM_EXPANSION_CHANGED`
     - `PARSED_QUERY_SHAPE_CHANGED`
+- Vector and hybrid ranking simulation:
+  - scenario modes: `lexical_only`, `vector_only`, `hybrid`
+  - query input supports `params` and `json_request`
+  - vector similarity sanity checks (field, dimension, similarity)
+  - vector retrieval stability metrics and semantic churn
+  - client-side hybrid blending (`linear`, `normalize_linear`, `rrf`) with Solr-native fallback
+  - lexical vs vector contribution estimates with dominance/confidence labels
+  - optional weight sensitivity sweep and tipping-point detection
 - Query sourcing:
   - file (`simple`, `jsonl`)
   - log extraction with sanitization and sampling
@@ -152,6 +173,111 @@ automatically falls back to `debugQuery=true` for rewrite extraction.
 - `preflight` schema dependency safety findings in `schema_risk.json`.
 - `gate` + `ci summarize` for rollout policy enforcement in CI.
 
+### 4) Vector and hybrid simulation
+
+Enable vector-aware scenarios in changeset:
+
+```yaml
+vector:
+  enabled: true
+  field: "emb"
+  dimension: 8
+  similarity: "cosine"
+  query_vector_policy: "skip" # skip|fail
+  scenarios:
+    - name: "lexical_only"
+      mode: "lexical_only"
+    - name: "vector_only"
+      mode: "vector_only"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+    - name: "hybrid_blend_70_30"
+      mode: "hybrid"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+      blend:
+        method: "normalize_linear" # linear|normalize_linear|rrf
+        execution: "client" # auto|client|solr_native
+        weight_lexical: 0.7
+        weight_vector: 0.3
+        normalize: "zscore"
+
+evaluation:
+  vector_hybrid:
+    enabled: true
+    topK: 10
+    candidate_pool: 100
+    sensitivity:
+      enabled: true
+      weights: [0.9, 0.7, 0.5, 0.3]
+```
+
+Run-time overrides:
+
+- `--scenario <name>` (repeatable)
+- `--enable-sensitivity/--no-enable-sensitivity`
+- `--weights \"0.9,0.7,0.5,0.3\"`
+- `--vector-dimension-override 8` (debug/testing)
+
+### 5) Performance and cost impact
+
+Enable performance capture to estimate latency, cache churn, and index-footprint impact:
+
+```yaml
+performance:
+  enabled: true
+  warmup:
+    enabled: true
+    iterations: 1
+    strategy: "interleaved"
+  capture:
+    qtime: true
+    client_latency: true
+    percentiles: [50, 95, 99]
+  caches:
+    enabled: true
+    names: ["filterCache", "queryResultCache", "documentCache", "fieldValueCache"]
+  index:
+    enabled: true
+    luke: true
+```
+
+Outputs include `perf_metrics.json`, grouped query classes, cache deltas, index-size deltas, and
+report callouts such as p95 latency regressions.
+
+### 6) Deterministic diagnosis and recommendations
+
+Schema-Lens can convert diff evidence into deterministic root-cause findings and action-oriented
+next steps:
+
+- root causes:
+  - `PREFIX_MATCHING_REMOVED`
+  - `TITLE_BOOST_REDUCED`
+  - `MIN_SHOULD_MATCH_STRICTER`
+  - `ANALYSIS_REMOVED_OR_FIELD_EXACTIFIED`
+  - `VECTOR_DOMINANCE_INCREASED`
+  - `CACHE_OR_LATENCY_REGRESSION`
+  - `FACET_FIELD_BEHAVIOR_CHANGED`
+- recommendations:
+  - dual-field prefix strategy
+  - copyField migration path
+  - smaller boost/mm steps
+  - hybrid weight sweeps
+  - cache/docValues tuning
+
+These are rules-based. There is no LLM dependency.
+
+### 7) Environment compare, monitoring, dashboard, and LTR
+
+- `compare-env` compares two live Solr environments for ranking/perf drift.
+- `monitor` appends snapshot-vs-current drift summaries into `monitor_history.jsonl`.
+- `serve` exposes a read-only FastAPI dashboard over run artifacts.
+- `ltr` awareness detects LTR requests and diffs feature logs when `[features]` is available.
+
 ## End-to-end flow
 
 ```text
@@ -192,6 +318,19 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 ```
+
+## Usage guide
+
+Start with [docs/usage-guide.md](docs/usage-guide.md).
+
+It provides:
+
+- the easiest first-time local workflow
+- a capability map by job-to-be-done
+- command selection guidance
+- example commands for schema, rewrite, vector, perf, env compare, dashboard, and monitoring
+- artifact-reading guidance
+- current validation status for each feature area
 
 ## Quickstart (basic)
 
@@ -249,6 +388,34 @@ schema-lens run examples/changesets/procurement-synonym-rewrite.yaml --out out/p
 cat out/procurement_demo/compare.json | rg "SYNONYM_EXPANSION_CHANGED|REWRITE_CLAUSE_SPIKE"
 ```
 
+## Quickstart (vector and hybrid simulation)
+
+1. Start SolrCloud:
+
+```bash
+make dev-up
+```
+
+2. Prepare vector collection/configset and ingest embeddings:
+
+```bash
+make demo-setup-vector
+```
+
+3. Run vector/hybrid scenario pack:
+
+```bash
+schema-lens run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
+```
+
+4. Inspect vector outputs:
+
+```bash
+cat out/vector_demo/compare.json | rg "vector_hybrid|hybrid_sensitivity|dominance"
+cat out/vector_demo/hybrid_sensitivity.json
+open out/vector_demo/report.html
+```
+
 ## CLI reference
 
 ### Primary commands
@@ -256,10 +423,11 @@ cat out/procurement_demo/compare.json | rg "SYNONYM_EXPANSION_CHANGED|REWRITE_CL
 - `schema-lens validate <changeset.yaml>`
 - `schema-lens inspect --solr-url URL --collection NAME --out PATH`
 - `schema-lens snapshot --solr-url URL --collection NAME --out DIR`
-- `schema-lens run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup]`
+- `schema-lens run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup] [--scenario NAME ...] [--enable-sensitivity/--no-enable-sensitivity] [--weights CSV] [--vector-dimension-override INT]`
 - `schema-lens replay --baseline-solr-url ... --baseline-collection ... --shadow-solr-url ... --shadow-collection ... --queries ... --k ... --out ...`
 - `schema-lens compare --replay PATH --k K --out PATH`
 - `schema-lens report --compare PATH --manifest PATH --out DIR`
+- `schema-lens api serve --out out/api --host 127.0.0.1 --port 8090`
 
 ### Shadow lifecycle
 
@@ -278,15 +446,30 @@ cat out/procurement_demo/compare.json | rg "SYNONYM_EXPANSION_CHANGED|REWRITE_CL
 - `schema-lens gate --compare compare.json --policy policy.yaml`
 - `schema-lens ci summarize --compare compare.json --out summary.md [--policy policy.yaml]`
 
+### Analysis and operations helpers
+
+- `schema-lens recommend --run out/run_xxx --out out/recommendations.json`
+- `schema-lens compare-env --env1 examples/envs/prod_us.yaml --env2 examples/envs/prod_eu.yaml --queries examples/queries/env_compare_queries.jsonl --out out/env_compare`
+- `schema-lens serve --run out/demo --port 8080`
+- `schema-lens serve --compare out/env_compare/compare.json --port 8080`
+- `schema-lens serve --api-url http://127.0.0.1:8090 --run-id <id> --port 8080`
+- `schema-lens monitor --baseline-snapshot out/demo --queries examples/queries/env_compare_queries.jsonl --out out/monitor`
+- `schema-lens rollout git-drift --solr-url URL --collection NAME --local-configset-dir DIR --out drift.json`
+- `schema-lens rollout canary-plan --baseline-collection NAME --canary-collection NAME --out canary_plan.json`
+- `schema-lens rollout alias-swap-plan --alias NAME --from-collection SRC --to-collection DST --out alias_plan.json [--execute --solr-url URL]`
+- `schema-lens rollout rollback-plan --alias NAME --previous-collection SRC --out rollback_plan.json`
+- `schema-lens rollout verify-post-cutover --canary-compare canary_compare.json --prod-compare prod_compare.json --out verify.json`
+
 ## Changeset reference
 
 See [docs/changeset-spec.md](docs/changeset-spec.md).
 
-Notable v0.1.3 additions:
+Notable v0.2.0 additions:
 
 - `schema.synonym.update`
 - `schema.stopwords.update`
 - `evaluation.rewrite_diff`
+- `vector` scenarios + `evaluation.vector_hybrid`
 - optional `shadow.baseline_configset_dir` for local configset source when patching.
 
 ## Output artifacts
@@ -300,16 +483,408 @@ A full `run` emits a reproducible bundle under `--out`:
 - `snapshot.system.json`
 - `snapshot.collection.json`
 - `snapshot.hash.txt`
+- `compat.json`
 - `schema_risk.json`
 - `shadow.json`
 - `docs_sample.jsonl` (when Solr doc sampling enabled)
 - `queries_extracted.jsonl` (when log extraction enabled)
 - `replay.json`
+- `replay_<scenario>.json` (when vector scenarios enabled)
 - `compare.json`
+- `vector_validation.json` (when vector enabled)
+- `hybrid_sensitivity.json` (when enabled)
+- `perf_metrics.json` (when performance enabled)
+- `segments.json` (when segment analysis enabled)
+- `rootcauses.json`
+- `recommendations.json`
+- `env_compare.json` (for `compare-env`)
+- `ltr_impact.json`
+- `audit.json` (security profile + auth mode trail)
+- `governance.json` (approval/promotion/exception/signing metadata)
+- `privacy.json` (masking, suppression, retention summary)
+- `observability_events.jsonl` / `otel_spans.json` / `webhook_deliveries.json` (when enabled)
+- `prometheus_metrics.prom` (when Prometheus export enabled)
+- `plugins.json` (when plugin SDK is enabled)
+- `latest_monitor.json` / `monitor_history.jsonl` (for `monitor`)
 - `report.json`
 - `report.html`
 
-`compare.json` and reports include rewrite impact payload when enabled.
+`compare.json` and reports include additive sections for rewrite impact, vector/hybrid simulation,
+performance, root-cause analysis, recommendations, environment drift, and LTR when available.
+
+## Plugin SDK
+
+Plugin support is optional and config-driven. Enable it in the changeset:
+
+```yaml
+plugins:
+  enabled: true
+  strict: false
+  config: ./examples/plugins/plugins_runtime.yaml
+```
+
+Supported extension-point contracts include auth, query/doc source, replay executor, diff analyzer,
+gate evaluator, report widget/renderer, observability exporter, and rollout provider.
+
+Plugin loading supports:
+
+- Python entry points (`schema_lens.plugins`)
+- Local plugin paths (`plugins.paths`)
+- Explicit enable/disable lists
+
+Lifecycle hooks:
+
+1. `validate()`
+2. `initialize()`
+3. `execute()`
+4. `cleanup()`
+
+Compatibility/versioning policy:
+
+- Plugins declare `schema_lens_version` in metadata.
+- Incompatible plugins are skipped and reported in `plugins.json`.
+- `plugins.strict: true` turns plugin load/compat/execute errors into run-blocking failures.
+
+Developer guide and examples:
+
+- [docs/plugin-sdk.md](docs/plugin-sdk.md)
+- `examples/plugins/sample_query_source/`
+- `examples/plugins/sample_gate/`
+- `examples/plugins/sample_report_widget/`
+
+## Security Mode
+
+Security controls are optional and backward compatible. Configure under `security` in a changeset:
+
+```yaml
+security:
+  profile: enterprise-safe
+  baseline_auth:
+    type: basic
+    username_env: SCHEMA_LENS_SOLR_USER
+    password_env: SCHEMA_LENS_SOLR_PASSWORD
+  shadow_auth:
+    type: bearer
+    token_env: SCHEMA_LENS_SOLR_TOKEN
+  audit:
+    requested_by: "user@example.com"
+    approval_reference: "CR-12345"
+```
+
+Supported auth modes:
+
+- `none`
+- `basic` (inline, `_env`, `_file`)
+- `bearer` (inline, `_env`, `_file`)
+- `mtls` (`cert_file`, optional `key_file`, optional `ca_file`)
+- `plugin` / `kerberos` (via auth provider plugin)
+
+Security profiles:
+
+- `local-dev`
+- `enterprise-safe`
+- `no-persist-sensitive`
+- `redacted-artifacts-only`
+
+Behavior:
+
+- secrets are redacted from `run_manifest.json`, `compare.json`, and `report.json` when redaction is enabled
+- `Authorization` headers are always masked in stored payloads
+- `audit.json` records requester, approval reference, target cluster/collection, and auth mode (never secret values)
+
+Examples:
+
+- `examples/security/basic_auth_env.yaml`
+- `examples/security/bearer_token_env.yaml`
+- `examples/security/mtls_config.yaml`
+
+## Solr Compatibility
+
+`schema-lens` detects Solr version from `/admin/info/system` and records capabilities in
+`compat.json` and `run_manifest.json`.
+
+Supported compatibility targets:
+
+- Solr `8.x`
+- Solr `9.x`
+- Solr `10.x`
+
+Capability-driven fallbacks:
+
+- vector/hybrid simulation is skipped when `vector_query_supported=false`
+- structured explain falls back to classic explain when unsupported
+- performance metrics capture is disabled when metrics capability is unavailable
+
+Reference fixtures:
+
+- `examples/compat/solr8_system_info.json`
+- `examples/compat/solr9_system_info.json`
+- `examples/compat/solr10_system_info.json`
+
+## API Server Mode
+
+Run a local-first REST service:
+
+```bash
+schema-lens api serve --out out/api --host 127.0.0.1 --port 8090
+```
+
+Core endpoints:
+
+- `POST /runs`
+- `GET /runs/{id}`
+- `GET /runs/{id}/artifacts`
+- `GET /runs/{id}/artifacts/{name}`
+- `GET /dashboard/runs`
+- `GET /dashboard/runs/{id}/overview`
+- `GET /dashboard/runs/{id}/query-explorer`
+- `POST /compare-env`
+- `POST /gate`
+- `GET /health`
+- `GET /capabilities`
+
+Create a run:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8090/runs \
+  -H "content-type: application/json" \
+  -d @examples/api/create_run_payload.json
+```
+
+Compare environments:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8090/compare-env \
+  -H "content-type: application/json" \
+  -d @examples/api/compare_env_payload.json
+```
+
+Upload-style submission is supported by including `changeset_file_content` and optional
+`changeset_file_name` in the JSON payload.
+
+Dashboard integration:
+
+```bash
+schema-lens serve --api-url http://127.0.0.1:8090 --run-id <run-id> --port 8080
+```
+
+Local-first security:
+
+- service defaults to local-only mode
+- auth middleware hooks can be layered in via app factory wiring
+- secrets are handled by existing security/redaction settings in run execution
+
+## Observability
+
+Enable runtime observability in changeset config:
+
+```yaml
+observability:
+  enabled: true
+  prometheus:
+    enabled: true
+  otel:
+    enabled: true
+  webhooks:
+    enabled: true
+    urls:
+      - "http://localhost:9000/schema-lens/events"
+```
+
+Runtime events emitted:
+
+- `run_started`
+- `run_completed`
+- `drift_detected`
+- `gate_failed` (reserved for gate workflows)
+
+Prometheus output includes:
+
+- `schema_lens_runs_total`
+- `schema_lens_runs_failed_total`
+- `schema_lens_high_risk_queries_total`
+- `schema_lens_gate_failures_total`
+- `schema_lens_p95_latency_regression_pct`
+- `schema_lens_cache_eviction_regression_pct`
+
+Examples:
+
+- `examples/observability/prometheus_config.md`
+- `examples/observability/webhook_payload.json`
+- `examples/observability/grafana_dashboard.json`
+
+## Governance
+
+Governance is optional and policy-driven:
+
+```yaml
+governance:
+  enabled: true
+  approval:
+    requested_by: "search-platform@example.com"
+    ticket_id: "REL-421"
+  promotion_state: "stage" # dev|stage|prod_candidate|prod_approved
+  policy_bundles:
+    - "./examples/governance/prod_promotion_policy.yaml"
+  exceptions:
+    - id: "ex-2026-001"
+      rationale: "Temporary rollout exception"
+      expiry: "2026-12-31T23:59:59Z"
+  signing:
+    enabled: true
+    secret_env: "SCHEMA_LENS_GOV_SIGNING_KEY"
+```
+
+Behavior:
+
+- validates approval metadata and promotion state
+- validates exception records with expiry tracking
+- merges reusable policy bundles for downstream gate workflows
+- writes `governance.json`
+- records `manifest_hash` and optional `signature` in manifest governance settings
+
+Examples:
+
+- `examples/governance/prod_promotion_policy.yaml`
+- `examples/governance/approval_metadata.json`
+- `examples/governance/exception_record.json`
+
+## Rollout Orchestration
+
+Rollout tooling is dry-run by default and emits deterministic JSON plans.
+
+Supported flows:
+
+- Git configset drift detection against live cluster
+- canary rollout checklist generation
+- alias swap plan generation
+- rollback plan generation
+- post-cutover verify checks
+
+Example commands:
+
+```bash
+schema-lens rollout git-drift \
+  --solr-url http://localhost:8983/solr \
+  --collection products \
+  --local-configset-dir examples/configsets/procurement_v1 \
+  --out out/rollout/git_drift.json
+
+schema-lens rollout canary-plan \
+  --baseline-collection products \
+  --canary-collection products_canary \
+  --traffic-sample-ratio 0.1 \
+  --replay-query-count 500 \
+  --out out/rollout/canary_plan.json
+
+schema-lens rollout alias-swap-plan \
+  --alias products_live \
+  --from-collection products_v1 \
+  --to-collection products_v2 \
+  --out out/rollout/alias_swap_plan.json
+```
+
+Execute mode is opt-in and explicitly dangerous:
+
+- `schema-lens rollout alias-swap-plan ... --execute --solr-url URL`
+
+Examples:
+
+- `examples/rollout/git_configset_compare.yaml`
+- `examples/rollout/canary_plan.yaml`
+- `examples/rollout/alias_swap_plan.json`
+
+## Segment-Aware Analysis
+
+Schema-lens can aggregate replay/compare impact by segment keys such as:
+
+- `tenant`
+- `region`
+- `locale`
+- `catalog`
+- arbitrary labels in `segment` metadata
+
+Use segmented query input (JSONL):
+
+- `examples/queries/multitenant_queries.jsonl`
+
+Optional segment config in changeset:
+
+```yaml
+segments:
+  enabled: true
+  keys: ["tenant", "region", "locale", "catalog"]
+  policy:
+    rules:
+      - segment_key: tenant
+        segment_value: acme
+        metric: high_risk_percent
+        op: ">"
+        value: 10
+        severity: fail
+```
+
+Outputs:
+
+- `segments.json` with `by_segment`, `top_impacted`, and policy evaluation
+- `compare.json.segments`
+- `report.json.segments`
+
+Example policy:
+
+- `examples/policy/tenant_specific_policy.yaml`
+
+## Data Privacy
+
+Privacy controls are optional and deterministic.
+
+```yaml
+privacy:
+  profile: export-safe # off | default | export-safe
+  allowlist: ["summary", "diffs", "top_regressions"]
+  denylist: ["raw_docs", "request_headers"]
+  no_persist_sensitive: true
+  hash_salt: "internal-salt"
+```
+
+Capabilities:
+
+- email masking
+- UUID masking
+- numeric ID hashing
+- allowlist/denylist filtering
+- raw sample suppression via profile
+- retention pruning for sensitive artifacts
+
+Outputs:
+
+- `privacy.json`
+- redacted `compare.json` / `report.json` / `run_manifest.json` when enabled
+
+Examples:
+
+- `examples/privacy/pii_masking_profile.yaml`
+- `examples/privacy/export_safe_mode.yaml`
+
+## Enterprise Packaging
+
+Distribution targets included:
+
+- Python package (build with `python -m build`)
+- Docker image (`docker/Dockerfile`)
+- Helm chart (`helm/schema-lens`)
+- release workflow (`.github/workflows/release.yml`)
+
+Release scripts:
+
+- `scripts/release/build_release.sh` (build + checksum + SBOM placeholder)
+- `scripts/release/verify_reproducibility.sh` (checksum verification)
+
+Deployment examples:
+
+- `examples/deploy/docker_run.md`
+- `examples/deploy/k8s_job.yaml`
+- `examples/deploy/github_actions.yml`
 
 ## Quality gate and CI usage
 
@@ -336,6 +911,11 @@ GitHub Actions workflows included:
 - `.github/workflows/ci.yml` (lint + unit + relevance summary job)
 - `.github/workflows/smoke-matrix.yml` (manual matrix run)
 
+## Architecture
+
+See [docs/architecture.md](docs/architecture.md) for the package map, stage flow, artifact model,
+and extension rules for new tracks.
+
 ## Testing
 
 Fast checks:
@@ -351,11 +931,62 @@ Full local smoke matrix:
 make smoke-matrix
 ```
 
+Vector-focused smoke:
+
+```bash
+make smoke-vector
+```
+
+Performance example:
+
+```bash
+.venv/bin/schema-lens run examples/changesets/perf_estimator_example.yaml --out out/perf_demo
+.venv/bin/schema-lens gate --compare out/perf_demo/compare.json --policy examples/policy/perf_gate_default.yaml
+```
+
+Environment compare example:
+
+```bash
+.venv/bin/schema-lens compare-env \
+  --env1 examples/envs/prod_us.yaml \
+  --env2 examples/envs/prod_eu.yaml \
+  --queries examples/queries/env_compare_queries.jsonl \
+  --out out/env_compare
+```
+
 Integration-marked tests:
 
 ```bash
 RUN_SCHEMA_LENS_SMOKE=1 .venv/bin/pytest -q -m integration
 ```
+
+### Validation status
+
+End-to-end smoke coverage currently exists for:
+
+- base `run` workflow
+- rewrite diff workflow
+- vector/hybrid workflow
+- smoke-matrix orchestration
+- environment compare workflow
+- monitor workflow
+- serve dashboard workflow
+
+These are covered by:
+
+- `tests/integration/test_run_smoke.py`
+- `tests/integration/test_rewrite_diff_smoke.py`
+- `tests/integration/test_vector_hybrid_smoke.py`
+- `tests/integration/test_smoke_matrix.py`
+- `tests/integration/test_ops_commands_smoke.py`
+
+Additional feature tracks are implemented and have unit/CLI coverage, but do not yet all have
+their own dedicated Docker-backed end-to-end tests:
+
+- performance analysis
+- root-cause analysis
+- recommendations
+- LTR analysis
 
 ## Troubleshooting
 
@@ -371,9 +1002,13 @@ RUN_SCHEMA_LENS_SMOKE=1 .venv/bin/pytest -q -m integration
   - use `debug_mode: results` if your Solr setup suppresses `debugQuery=true` fields.
 - Query replay errors (`400`):
   - logs may contain unsupported params/fields in the target collection.
+- `schema-lens serve` fails with FastAPI import errors:
+  - install current dependencies again with `pip install -e ".[dev]"` so the dashboard extras are present.
 
 ## Safety notes
 
 - Tooling is non-AI and deterministic for all scoring/diff metrics.
+- Vector lexical-vs-vector contribution values are explicitly heuristic estimates unless
+  decomposed Solr score components are available.
 - Cleanup is configurable; with cleanup disabled, shadow artifacts remain for manual inspection.
 - Reproducibility depends on stable input snapshots and representative docs/queries.

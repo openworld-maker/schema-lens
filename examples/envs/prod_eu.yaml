@@ -1,0 +1,10 @@
+name: "prod_eu"
+solr_url: "http://localhost:8983/solr"
+collection: "products_shadow"
+request_defaults:
+  defType: "edismax"
+  rows: 10
+  fl: "id,score"
+headers:
+  X-Region: "eu"
+notes: "Example production-like EU cluster configuration."

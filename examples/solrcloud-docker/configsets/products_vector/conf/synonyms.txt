@@ -1,0 +1,3 @@
+ss,stainless steel
+ppe,personal protective equipment
+anti fog,antifog

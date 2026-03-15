@@ -1,0 +1,14 @@
+metadata:
+  name: prod-promotion-policy
+  stage: prod_candidate
+fail:
+  - metric: pct_high_risk_queries
+    op: ">"
+    value: 5
+  - metric: p95_latency_regression_pct
+    op: ">"
+    value: 20
+warn:
+  - metric: cache_eviction_regression_pct
+    op: ">"
+    value: 30

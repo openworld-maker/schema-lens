@@ -1,0 +1,24 @@
+image:
+  repository: schema-lens
+  tag: local
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 8090
+
+resources: {}
+
+api:
+  outDir: /data/out/api
+  localOnly: false
+
+podAnnotations: {}
+
+podLabels: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

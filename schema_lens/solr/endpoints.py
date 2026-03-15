@@ -11,6 +11,10 @@ def query_path(collection: str) -> str:
     return f"{collection}/select"
 
 
+def query_json_path(collection: str) -> str:
+    return f"{collection}/query"
+
+
 def update_path(collection: str) -> str:
     return f"{collection}/update"
 
@@ -25,3 +29,15 @@ def configsets_admin_path() -> str:
 
 def system_info_path() -> str:
     return "admin/info/system"
+
+
+def metrics_path() -> str:
+    return "admin/metrics"
+
+
+def mbeans_path() -> str:
+    return "admin/mbeans"
+
+
+def luke_path(collection: str) -> str:
+    return f"{collection}/admin/luke"

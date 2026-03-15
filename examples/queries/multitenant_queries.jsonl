@@ -1,0 +1,3 @@
+{"params":{"q":"laptop"},"segment":{"tenant":"acme","region":"us","locale":"en_US","catalog":"electronics"}}
+{"params":{"q":"notebook"},"segment":{"tenant":"acme","region":"eu","locale":"de_DE","catalog":"electronics"}}
+{"params":{"q":"desk"},"segment":{"tenant":"globex","region":"us","locale":"en_US","catalog":"office"}}

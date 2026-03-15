@@ -1,0 +1,15 @@
+security:
+  profile: enterprise-safe
+  audit:
+    requested_by: "platform-team@example.com"
+    approval_reference: "CR-12345"
+  baseline_auth:
+    type: mtls
+    cert_file: "./certs/client.pem"
+    key_file: "./certs/client.key"
+    ca_file: "./certs/ca.pem"
+  shadow_auth:
+    type: mtls
+    cert_file: "./certs/client.pem"
+    key_file: "./certs/client.key"
+    ca_file: "./certs/ca.pem"

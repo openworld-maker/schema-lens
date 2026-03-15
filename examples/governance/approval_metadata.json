@@ -1,0 +1,6 @@
+{
+  "requested_by": "search-platform@example.com",
+  "approved_by": "relevance-lead@example.com",
+  "ticket_id": "REL-421",
+  "change_request_id": "CR-9921"
+}

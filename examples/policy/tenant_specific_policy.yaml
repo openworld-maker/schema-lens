@@ -1,0 +1,13 @@
+rules:
+  - segment_key: tenant
+    segment_value: acme
+    metric: high_risk_percent
+    op: ">"
+    value: 10
+    severity: fail
+  - segment_key: region
+    segment_value: eu
+    metric: avg_overlap_ratio
+    op: "<"
+    value: 0.6
+    severity: warn

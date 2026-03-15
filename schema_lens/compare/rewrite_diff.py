@@ -231,10 +231,11 @@ def run_rewrite_diff(
         if not pair:
             continue
         query = pair.get("query", {})
-        raw_query = str(query.get("raw_line") or query.get("params", {}).get("q") or "")
+        query_params = query.get("params", {}) if isinstance(query.get("params"), dict) else {}
+        raw_query = str(query.get("raw_line") or query_params.get("q") or "")
         params = pair.get("effective_params")
         if not isinstance(params, dict):
-            params = query.get("params", {})
+            params = query_params
 
         baseline_error = None
         shadow_error = None

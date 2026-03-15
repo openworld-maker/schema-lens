@@ -36,6 +36,48 @@ def _looks_like_param_string(text: str) -> bool:
     return "&" in text or text.split("=", 1)[0].isalnum()
 
 
+def _coerce_query_vector(value: Any) -> list[float] | None:
+    if not isinstance(value, list):
+        return None
+    out: list[float] = []
+    for item in value:
+        try:
+            out.append(float(item))
+        except (TypeError, ValueError):
+            return None
+    return out or None
+
+
+def _query_text_from_json_request(payload: dict[str, Any]) -> str:
+    query = payload.get("query")
+    if isinstance(query, str):
+        return query
+    params = payload.get("params")
+    if isinstance(params, dict):
+        q = params.get("q")
+        if isinstance(q, str):
+            return q
+    return ""
+
+
+def _segment_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    segment: dict[str, str] = {}
+    if isinstance(payload.get("segment"), dict):
+        for key, value in payload["segment"].items():
+            if isinstance(key, str) and value is not None:
+                segment[key] = str(value)
+    for key in ("tenant", "region", "locale", "catalog"):
+        value = payload.get(key)
+        if value is not None:
+            segment[key] = str(value)
+    labels = payload.get("labels")
+    if isinstance(labels, dict):
+        for key, value in labels.items():
+            if isinstance(key, str) and value is not None:
+                segment[key] = str(value)
+    return segment
+
+
 def parse_simple_line(line: str) -> dict[str, Any]:
     text = line.strip()
     if not text:
@@ -79,6 +121,9 @@ def load_queries(
                 normalized_q=normalize_q(params),
                 fingerprint=query_fingerprint(params),
                 params=params,
+                request_mode="params",
+                skip_reasons=[],
+                segment={},
             )
             cases.append(case)
             if max_queries and len(cases) >= max_queries:
@@ -90,20 +135,61 @@ def load_queries(
                 if not stripped:
                     continue
                 try:
-                    params = json.loads(stripped)
+                    payload = json.loads(stripped)
                 except json.JSONDecodeError as exc:
                     raise ValidationError(f"Invalid JSONL query at line {line_no}") from exc
-                if not isinstance(params, dict):
+                if not isinstance(payload, dict):
                     raise ValidationError(f"JSONL query at line {line_no} must be object")
-                if isinstance(params.get("params"), dict):
-                    params = params["params"]
+
+                name = payload.get("name")
+                if name is not None and not isinstance(name, str):
+                    name = str(name)
+                params: dict[str, Any] | None = None
+                json_request: dict[str, Any] | None = None
+                request_mode = "params"
+
+                if isinstance(payload.get("params"), dict):
+                    params = payload["params"]
+                elif isinstance(payload.get("json_request"), dict):
+                    json_request = payload["json_request"]
+                    request_mode = "json_request"
+                elif "json_request" in payload and payload["json_request"] is not None:
+                    raise ValidationError(
+                        f"JSONL query at line {line_no} has invalid json_request object"
+                    )
+                else:
+                    params = payload
+
+                if isinstance(payload.get("json_request"), dict):
+                    json_request = payload["json_request"]
+                    if params is None:
+                        request_mode = "json_request"
+
+                query_vector = _coerce_query_vector(payload.get("vector"))
+                normalized_q = normalize_q(params)
+                if not normalized_q and isinstance(json_request, dict):
+                    normalized_q = _query_text_from_json_request(json_request)
+                fingerprint_payload: dict[str, Any] = {}
+                if isinstance(params, dict):
+                    fingerprint_payload["params"] = params
+                if isinstance(json_request, dict):
+                    fingerprint_payload["json_request"] = json_request
+                if query_vector is not None:
+                    fingerprint_payload["vector"] = query_vector
+
                 case = QueryCase(
                     id=len(cases) + 1,
                     line_no=line_no,
                     raw_line=stripped,
-                    normalized_q=normalize_q(params),
-                    fingerprint=query_fingerprint(params),
+                    normalized_q=normalized_q,
+                    fingerprint=query_fingerprint(fingerprint_payload),
                     params=params,
+                    name=name,
+                    json_request=json_request,
+                    query_vector=query_vector,
+                    request_mode=request_mode,
+                    skip_reasons=[],
+                    segment=_segment_from_payload(payload),
                 )
                 cases.append(case)
                 if max_queries and len(cases) >= max_queries:

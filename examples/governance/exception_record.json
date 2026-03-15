@@ -1,0 +1,6 @@
+{
+  "id": "ex-2026-001",
+  "rationale": "Temporary tolerance while migrating synonyms",
+  "approved_by": "oncall@example.com",
+  "expiry": "2026-12-31T23:59:59Z"
+}

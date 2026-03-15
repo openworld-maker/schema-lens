@@ -66,6 +66,52 @@ def build_report_json(
         "summary": summary,
         "schema_safety_findings": compare_data.get("schema_safety_findings", {}),
         "query_rewrite_impact": compare_data.get("rewrite_diff", {}),
+        "performance_cost_impact": compare_data.get(
+            "performance",
+            {"enabled": False, "reason": "Performance capture not enabled."},
+        ),
+        "root_causes": compare_data.get(
+            "root_causes",
+            {"enabled": False, "reason": "Root-cause analysis not generated."},
+        ),
+        "recommendations": compare_data.get(
+            "recommendations",
+            {"enabled": False, "reason": "Recommendations not generated."},
+        ),
+        "environment_compare": compare_data.get(
+            "environment_compare",
+            {"enabled": False, "reason": "Environment compare not generated."},
+        ),
+        "ltr_impact": compare_data.get(
+            "ltr_impact",
+            {"enabled": False, "reason": "LTR impact not available."},
+        ),
+        "compatibility": compare_data.get(
+            "compatibility",
+            manifest.get("settings", {}).get("compatibility", {}),
+        ),
+        "observability": compare_data.get(
+            "observability",
+            {"enabled": False, "reason": "Observability hooks not enabled."},
+        ),
+        "governance": compare_data.get(
+            "governance",
+            manifest.get("settings", {}).get("governance", {"enabled": False}),
+        ),
+        "segments": compare_data.get(
+            "segments",
+            {"enabled": False, "reason": "Segment analysis not generated."},
+        ),
+        "privacy": compare_data.get(
+            "privacy",
+            manifest.get("settings", {}).get("privacy", {"enabled": False}),
+        ),
+        "plugins": compare_data.get(
+            "plugins",
+            {"enabled": False, "results": [], "issues": []},
+        ),
+        "vector_hybrid_simulation": compare_data.get("vector_hybrid", {}),
+        "hybrid_sensitivity": compare_data.get("hybrid_sensitivity", {}),
         "top_regressions": top_regressions,
         "per_query_diffs": compare_data.get("diffs", []),
         "explain_bundles": compare_data.get("explain_bundles", []),

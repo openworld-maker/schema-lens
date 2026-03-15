@@ -1,0 +1,20 @@
+version: 1
+
+fail:
+  - metric: "p95_latency_regression_pct"
+    op: ">"
+    value: 20
+  - metric: "p95_qtime_regression_pct"
+    op: ">"
+    value: 20
+  - metric: "cache_eviction_regression_pct"
+    op: ">"
+    value: 50
+  - metric: "index_size_regression_pct"
+    op: ">"
+    value: 20
+
+warn:
+  - metric: "pct_high_risk_queries"
+    op: ">"
+    value: 5

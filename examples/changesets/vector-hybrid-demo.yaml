@@ -1,0 +1,130 @@
+schema_lens_version: 1
+
+baseline:
+  solr_url: "http://localhost:8983/solr"
+  collection: "products_vector"
+  request_defaults:
+    rows: 10
+    fl: "id,score"
+    defType: "edismax"
+    extra_params:
+      qf: "title^7 longDesc^2 category^1 mpn^5 manufacturer^2"
+      pf: "title^20"
+      mm: "2<-1 5<80%"
+
+shadow:
+  mode: "solrcloud"
+  solr_url: "http://localhost:8983/solr"
+  collection_name_template: "{collection}__shadow__{ts}"
+  num_shards: 1
+  replication_factor: 1
+  cleanup: true
+
+data:
+  docs_source:
+    type: "file"
+    path: "examples/vectors/embeddings_small.jsonl"
+    format: "jsonl"
+    id_field: "id"
+
+queries:
+  source:
+    type: "file"
+    path: "examples/queries/procurement_vector_queries.jsonl"
+    format: "jsonl"
+  max_queries: 50
+
+vector:
+  enabled: true
+  field: "emb"
+  dimension: 8
+  similarity: "cosine"
+  query_vector_policy: "skip"
+  scenarios:
+    - name: "lexical_only"
+      mode: "lexical_only"
+      lexical:
+        defType: "edismax"
+        qf: "title^7 longDesc^2 category^1 mpn^5 manufacturer^2"
+        pf: "title^20"
+        mm: "2<-1 5<80%"
+    - name: "vector_only"
+      mode: "vector_only"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+    - name: "hybrid_blend_70_30"
+      mode: "hybrid"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+      lexical:
+        defType: "edismax"
+        qf: "title^7 longDesc^2 category^1 mpn^5 manufacturer^2"
+        pf: "title^20"
+        mm: "2<-1 5<80%"
+      blend:
+        method: "normalize_linear"
+        execution: "client"
+        weight_lexical: 0.7
+        weight_vector: 0.3
+        normalize: "zscore"
+        missing_vector_score: 0.0
+    - name: "hybrid_blend_90_10"
+      mode: "hybrid"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+      lexical:
+        defType: "edismax"
+        qf: "title^7 longDesc^2 category^1 mpn^5 manufacturer^2"
+        pf: "title^20"
+        mm: "2<-1 5<80%"
+      blend:
+        method: "normalize_linear"
+        execution: "client"
+        weight_lexical: 0.9
+        weight_vector: 0.1
+        normalize: "zscore"
+        missing_vector_score: 0.0
+    - name: "hybrid_blend_30_70"
+      mode: "hybrid"
+      knn:
+        field: "emb"
+        k: 100
+        topK: 10
+      lexical:
+        defType: "edismax"
+        qf: "title^7 longDesc^2 category^1 mpn^5 manufacturer^2"
+        pf: "title^20"
+        mm: "2<-1 5<80%"
+      blend:
+        method: "normalize_linear"
+        execution: "client"
+        weight_lexical: 0.3
+        weight_vector: 0.7
+        normalize: "zscore"
+        missing_vector_score: 0.0
+
+changes:
+  - op: "queryparams.set"
+    set:
+      qf: "title^7 longDesc^2 category^1 mpn^5 manufacturer^2"
+
+
+evaluation:
+  k: 10
+  metrics:
+    - overlap
+    - jaccard
+    - kendall_tau
+  vector_hybrid:
+    enabled: true
+    topK: 10
+    candidate_pool: 50
+    sensitivity:
+      enabled: true
+      weights: [0.9, 0.7, 0.5, 0.3]

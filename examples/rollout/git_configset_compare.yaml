@@ -1,0 +1,4 @@
+solr_url: "http://localhost:8983/solr"
+collection: "products"
+local_configset_dir: "examples/configsets/procurement_v1"
+out: "out/rollout/git_drift.json"

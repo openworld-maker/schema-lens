@@ -1,0 +1,10 @@
+{
+  "changeset_path": "examples/changesets/fieldtype-change.yaml",
+  "k": 10,
+  "cleanup": true,
+  "batch_size": 100,
+  "verbose": false,
+  "metadata": {
+    "requested_by": "platform-team"
+  }
+}

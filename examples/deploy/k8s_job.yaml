@@ -1,0 +1,17 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: schema-lens-run
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: schema-lens
+          image: schema-lens:local
+          command: ["schema-lens"]
+          args:
+            - "run"
+            - "examples/changesets/fieldtype-change.yaml"
+            - "--out"
+            - "out/k8s_run"

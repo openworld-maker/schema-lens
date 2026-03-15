@@ -1,0 +1,10 @@
+{
+  "event_type": "run_completed",
+  "timestamp": "2026-03-15T22:00:00Z",
+  "run_id": "3e4ef87a-2d1f-4c27-80b5-7ba668ef09e6",
+  "payload": {
+    "status": "succeeded",
+    "duration_seconds": 18.2,
+    "queries_run": 250
+  }
+}

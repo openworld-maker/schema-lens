@@ -1,0 +1,5 @@
+{
+  "lucene": {
+    "solr-spec-version": "9.7.0"
+  }
+}

@@ -38,7 +38,7 @@ jobs:
         startsWith(github.event.comment.body, '/ops run') ||
         startsWith(github.event.comment.body, '/ops resume')
       ))
-    uses: openworld-maker/ops-infra/.github/workflows/autonomous-dev.yml@a9b7650e0df261a2411ff680438f5b5cfcbca9d3
+    uses: openworld-maker/ops-infra/.github/workflows/autonomous-dev.yml@b3e0aba1e53808ac43242ef400c1c94131d10d1e
     with:
       issue_number: ${{ github.event.inputs.issue_number || github.event.issue.number || '' }}
       objective: ${{ github.event.inputs.objective || '' }}
@@ -52,7 +52,7 @@ jobs:
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && contains(join(github.event.pull_request.labels.*.name, ','), 'ops:auto')) ||
       (github.event_name == 'pull_request_review' && contains(join(github.event.pull_request.labels.*.name, ','), 'ops:auto'))
-    uses: openworld-maker/ops-infra/.github/workflows/review-autopilot.yml@a9b7650e0df261a2411ff680438f5b5cfcbca9d3
+    uses: openworld-maker/ops-infra/.github/workflows/review-autopilot.yml@b3e0aba1e53808ac43242ef400c1c94131d10d1e
     with:
       pr_number: ${{ github.event.pull_request.number || '0' }}
       executor_prompt_version: v1.0.0
@@ -63,7 +63,7 @@ jobs:
       github.event_name == 'pull_request_review' &&
       github.event.review.state == 'approved' &&
       contains(join(github.event.pull_request.labels.*.name, ','), 'ops:auto')
-    uses: openworld-maker/ops-infra/.github/workflows/merge-gate.yml@a9b7650e0df261a2411ff680438f5b5cfcbca9d3
+    uses: openworld-maker/ops-infra/.github/workflows/merge-gate.yml@b3e0aba1e53808ac43242ef400c1c94131d10d1e
     with:
       pr_number: ${{ github.event.pull_request.number }}
     secrets: inherit
