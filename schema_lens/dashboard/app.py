@@ -27,9 +27,9 @@ def _render_overview(artifacts: dict[str, object]) -> str:
     recommendations = report.get("recommendations", {}) if isinstance(report, dict) else {}
     return f"""
     <html>
-      <head><title>Schema-Lens Dashboard</title></head>
+      <head><title>SolrGuard Dashboard</title></head>
       <body>
-        <h1>Schema-Lens Dashboard</h1>
+        <h1>SolrGuard Dashboard</h1>
         <h2>Overview</h2>
         <p>Queries: {summary.get("queries_total", 0)}</p>
         <p>Avg overlap: {summary.get("avg_overlap", 0)}</p>
@@ -50,10 +50,10 @@ def create_dashboard_app(
     run_id: str | None = None,
 ) -> FastAPI:
     if not FASTAPI_AVAILABLE:
-        raise RuntimeError("FastAPI is required for `schema-lens serve`. Install dashboard deps.")
+        raise RuntimeError("FastAPI is required for `solrguard serve`. Install dashboard deps.")
     if base_path is None and not (api_base_url and run_id):
         raise ValueError("Provide either base_path or api_base_url+run_id")
-    app = FastAPI(title="schema-lens dashboard")
+    app = FastAPI(title="solrguard dashboard")
 
     def _load() -> dict[str, object]:
         if api_base_url and run_id:

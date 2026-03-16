@@ -1,0 +1,16 @@
+baseline:
+  solr_url: "http://localhost:8983/solr"
+  collection: "products"
+shadow:
+  solr_url: "http://localhost:8983/solr"
+  collection_prefix: "products_shadow"
+queries:
+  source:
+    type: file
+    path: "examples/queries/multitenant_queries.jsonl"
+privacy:
+  profile: export-safe
+  hashed_doc_ids: true
+  no_persist_sensitive: true
+  no_raw_query_persistence: true
+  retention_days: 7

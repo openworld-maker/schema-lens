@@ -8,4 +8,4 @@ privacy:
     - raw_docs
     - request_headers
   no_persist_sensitive: false
-  hash_salt: "schema-lens-internal"
+  hash_salt: "solrguard-internal"

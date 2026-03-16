@@ -36,8 +36,11 @@ def test_prometheus_metrics_emission():
     }
     prom = build_metrics_from_compare(compare_data, failed=False)
     text = prom.render_text()
+    assert "solrguard_runs_total" in text
     assert "schema_lens_runs_total" in text
+    assert "solrguard_high_risk_queries_total 1.0" in text
     assert "schema_lens_high_risk_queries_total 1.0" in text
+    assert "solrguard_p95_latency_regression_pct 20.0" in text
     assert "schema_lens_p95_latency_regression_pct 20.0" in text
 
 

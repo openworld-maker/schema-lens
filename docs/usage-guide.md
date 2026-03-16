@@ -1,6 +1,6 @@
-# Schema-Lens Usage Guide
+# SolrGuard Usage Guide
 
-`schema-lens` is a local-first Solr change simulator. It helps you answer one question before you
+`solrguard` is a local-first search change governance toolkit for Apache Solr. It helps you answer one question before you
 ship a schema or query-default change:
 
 "What will this change do to ranking, parser behavior, facets, latency, and rollout risk?"
@@ -22,13 +22,13 @@ Fastest first run:
 ```bash
 make dev-up
 make demo-setup
-.venv/bin/schema-lens run examples/changesets/fieldtype-change.yaml --out out/demo
+.venv/bin/solrguard run examples/changesets/fieldtype-change.yaml --out out/demo
 open out/demo/report.html
 ```
 
 ## What The Tool Does
 
-At a high level, `schema-lens`:
+At a high level, `solrguard`:
 
 1. captures baseline collection metadata
 2. creates a shadow collection
@@ -51,19 +51,19 @@ Use this table as the shortest path to the right command.
 
 | Goal | Command | Primary output |
 | --- | --- | --- |
-| Validate a changeset before running | `schema-lens validate <changeset>` | terminal validation result |
-| Inspect a live collection | `schema-lens inspect --solr-url ... --collection ... --out inspect.json` | `inspect.json` |
-| Capture a reproducible baseline snapshot | `schema-lens snapshot --solr-url ... --collection ... --out out/snapshot` | `snapshot.json` bundle |
-| Run full baseline vs shadow evaluation | `schema-lens run <changeset> --out out/run` | `report.html`, `report.json`, `compare.json` |
-| Replay only, without full run orchestration | `schema-lens replay ... --out replay.json` | `replay.json` |
-| Compare an existing replay payload | `schema-lens compare --replay replay.json --out compare.json` | `compare.json` |
-| Generate reports from existing compare data | `schema-lens report --compare compare.json --manifest run_manifest.json --out out/report` | `report.json`, `report.html` |
-| Apply rollout policy thresholds | `schema-lens gate --compare compare.json --policy policy.yaml` | exit code + terminal summary |
-| Produce CI markdown summary | `schema-lens ci summarize --compare compare.json --out summary.md` | `summary.md` |
-| Compare two live environments | `schema-lens compare-env --env1 ... --env2 ... --queries ... --out out/env_compare` | `env_compare.json`, `report.html` |
-| Generate recommendations from an existing run | `schema-lens recommend --run out/run --out recommendations.json` | `recommendations.json` |
-| Serve a read-only artifact dashboard | `schema-lens serve --run out/run --port 8080` | local dashboard |
-| Append drift history from a baseline run/snapshot | `schema-lens monitor --baseline-snapshot out/run --queries ... --out out/monitor` | `latest_monitor.json`, `monitor_history.jsonl` |
+| Validate a changeset before running | `solrguard validate <changeset>` | terminal validation result |
+| Inspect a live collection | `solrguard inspect --solr-url ... --collection ... --out inspect.json` | `inspect.json` |
+| Capture a reproducible baseline snapshot | `solrguard snapshot --solr-url ... --collection ... --out out/snapshot` | `snapshot.json` bundle |
+| Run full baseline vs shadow evaluation | `solrguard run <changeset> --out out/run` | `report.html`, `report.json`, `compare.json` |
+| Replay only, without full run orchestration | `solrguard replay ... --out replay.json` | `replay.json` |
+| Compare an existing replay payload | `solrguard compare --replay replay.json --out compare.json` | `compare.json` |
+| Generate reports from existing compare data | `solrguard report --compare compare.json --manifest run_manifest.json --out out/report` | `report.json`, `report.html` |
+| Apply rollout policy thresholds | `solrguard gate --compare compare.json --policy policy.yaml` | exit code + terminal summary |
+| Produce CI markdown summary | `solrguard ci summarize --compare compare.json --out summary.md` | `summary.md` |
+| Compare two live environments | `solrguard compare-env --env1 ... --env2 ... --queries ... --out out/env_compare` | `env_compare.json`, `report.html` |
+| Generate recommendations from an existing run | `solrguard recommend --run out/run --out recommendations.json` | `recommendations.json` |
+| Serve a read-only artifact dashboard | `solrguard serve --run out/run --port 8080` | local dashboard |
+| Append drift history from a baseline run/snapshot | `solrguard monitor --baseline-snapshot out/run --queries ... --out out/monitor` | `latest_monitor.json`, `monitor_history.jsonl` |
 
 ## Capabilities
 
@@ -213,7 +213,7 @@ Use it when:
 Best example:
 
 ```bash
-.venv/bin/schema-lens compare-env \
+.venv/bin/solrguard compare-env \
   --env1 examples/envs/prod_us.yaml \
   --env2 examples/envs/prod_eu.yaml \
   --queries examples/queries/env_compare_queries.jsonl \
@@ -246,7 +246,7 @@ Use these when:
 ```bash
 make dev-up
 make demo-setup
-.venv/bin/schema-lens run examples/changesets/fieldtype-change.yaml --out out/demo
+.venv/bin/solrguard run examples/changesets/fieldtype-change.yaml --out out/demo
 open out/demo/report.html
 ```
 
@@ -255,7 +255,7 @@ open out/demo/report.html
 ```bash
 make dev-up
 make demo-setup-procurement
-.venv/bin/schema-lens run examples/changesets/procurement-synonym-rewrite.yaml --out out/procurement_demo
+.venv/bin/solrguard run examples/changesets/procurement-synonym-rewrite.yaml --out out/procurement_demo
 open out/procurement_demo/report.html
 ```
 
@@ -264,7 +264,7 @@ open out/procurement_demo/report.html
 ```bash
 make dev-up
 make demo-setup-vector
-.venv/bin/schema-lens run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
+.venv/bin/solrguard run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
 open out/vector_demo/report.html
 ```
 
@@ -273,14 +273,14 @@ open out/vector_demo/report.html
 ```bash
 make dev-up
 make demo-setup
-.venv/bin/schema-lens run examples/changesets/perf_estimator_example.yaml --out out/perf_demo
-.venv/bin/schema-lens gate --compare out/perf_demo/compare.json --policy examples/policy/perf_gate_default.yaml
+.venv/bin/solrguard run examples/changesets/perf_estimator_example.yaml --out out/perf_demo
+.venv/bin/solrguard gate --compare out/perf_demo/compare.json --policy examples/policy/perf_gate_default.yaml
 ```
 
 ### Environment drift workflow
 
 ```bash
-.venv/bin/schema-lens compare-env \
+.venv/bin/solrguard compare-env \
   --env1 examples/envs/prod_us.yaml \
   --env2 examples/envs/prod_eu.yaml \
   --queries examples/queries/env_compare_queries.jsonl \

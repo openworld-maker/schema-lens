@@ -1,4 +1,9 @@
-from schema_lens.compat import capabilities_for_version, detect_solr_version
+from pathlib import Path
+
+from typer.testing import CliRunner
+
+from schema_lens.cli import app
+from schema_lens.compat import capabilities_for_version, compatibility_contract, detect_solr_version
 from schema_lens.compat.adapters import (
     configset_upload_supported,
     metrics_supported,
@@ -38,3 +43,43 @@ def test_unknown_version_degrades_safely():
     caps = capabilities_for_version(None)
     assert caps["version_detected"] is False
     assert metrics_supported(caps)
+
+
+def test_compatibility_contract_contains_missing_and_fallbacks():
+    contract = compatibility_contract("8.11.2")
+    assert contract["support_tier"] == "supported_with_fallbacks"
+    assert "vector_search" in contract["missing_capabilities"]
+    assert any(item["feature"] == "vector_hybrid" for item in contract["fallbacks"])
+
+
+def test_detect_capabilities_cli_from_fixture(tmp_path: Path):
+    runner = CliRunner()
+    out = tmp_path / "caps.json"
+    result = runner.invoke(
+        app,
+        [
+            "detect-capabilities",
+            "--from-file",
+            "examples/compat/solr9_system_info.json",
+            "--out",
+            str(out),
+        ],
+    )
+    assert result.exit_code == 0
+    payload = out.read_text(encoding="utf-8")
+    assert "recommended" in payload
+    assert "vector_search" in payload
+
+
+def test_compatibility_cli_from_fixture():
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "compatibility",
+            "--from-file",
+            "examples/compat/solr10_system_info.json",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "forward_ready" in result.stdout

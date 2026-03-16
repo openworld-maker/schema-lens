@@ -1,8 +1,8 @@
-# Schema-Lens Architecture
+# SolrGuard Architecture
 
 ## Overview
 
-`schema-lens` is a local-first Solr impact simulator. The CLI orchestrates a staged workflow that:
+`solrguard` is a local-first search change governance toolkit for Apache Solr. The CLI orchestrates a staged workflow that:
 
 1. captures reproducible baseline metadata
 2. provisions a shadow collection/configset
@@ -40,6 +40,58 @@ queries extract/load -> replay -> compare
         |
         v
 report.json + report.html + run_manifest.json + plugins.json
+```
+
+## Layered Architecture Diagram
+
+```mermaid
+flowchart LR
+    A["Interfaces: CLI / API / CI / Plugins"] --> B["Analysis Layer"]
+    B --> C["Governance Layer"]
+    C --> D["Runtime Integration Layer"]
+    D --> E["Delivery Layer"]
+
+    B --- B1["Replay/Compare"]
+    B --- B2["Compatibility + Capability Detection"]
+    B --- B3["Segmentation + Privacy Filters"]
+    C --- C1["Policies + Gates"]
+    C --- C2["Approvals + Exceptions"]
+    C --- C3["Promotion State + Audit"]
+    D --- D1["Security + Redaction"]
+    D --- D2["Observability + Webhooks"]
+    D --- D3["Rollout Orchestration"]
+    E --- E1["Artifacts + Reports"]
+    E --- E2["Docker/Helm/API Service"]
+```
+
+## Governance Workflow Diagram
+
+```mermaid
+flowchart LR
+    A["Change Proposal"] --> B["Detect Solr Version/Capabilities"]
+    B --> C["Baseline vs Candidate Analysis"]
+    C --> D["Policy Evaluation"]
+    D --> E{"Pass?"}
+    E -->|"No"| F["Exception Required or Reject"]
+    E -->|"Yes"| G["Approval Metadata"]
+    F --> G
+    G --> H["Rollout and Rollback Plan"]
+    H --> I["Post-cutover Verification"]
+    I --> J["Audit + Export-safe Artifacts"]
+```
+
+## GitOps Rollout Flow
+
+```mermaid
+flowchart LR
+    A["Git Configset"] --> C["Git vs Live Diff"]
+    B["Live Solr Cluster"] --> C
+    C --> D["Canary Plan"]
+    D --> E["Alias Swap Dry-run"]
+    E --> F["Policy and Approval Check"]
+    F --> G["Execute in Delivery System"]
+    G --> H["Post-cutover Verify"]
+    H --> I["Rollback Plan (if required)"]
 ```
 
 ## Main Packages
@@ -131,7 +183,7 @@ disk. `ci` formats PR-friendly markdown summaries.
 ### Packaging and deployment
 
 - `docker/`
-- `helm/schema-lens/`
+- `helm/solrguard/`
 - `scripts/release/`
 - `.github/workflows/release.yml`
 
@@ -187,10 +239,29 @@ This keeps downstream report/dashboard code stable.
 
 Plugin runtime is intentionally narrow:
 
-1. Discovery: entry points and local plugin paths
+1. Discovery: built-in + local directories + Python entry points
 2. Contract check: metadata and version compatibility
-3. Lifecycle: `validate -> initialize -> execute -> cleanup`
+3. Lifecycle: `validate -> initialize -> (phase hooks) -> execute -> cleanup`
 4. Isolation: plugin failures are recorded in artifacts and only block runs in strict mode
+
+Plugin boundary diagram:
+
+```text
+changeset/plugins config
+        |
+        v
+  PluginLoader ----> PluginRegistry
+        |                 |
+        v                 v
+  PluginRuntime ----> phase hooks
+  (plugin_service)       - query/doc source
+        |                - auth/replay/analyze
+        v                - gate/report/rollout
+ out/<run>/plugins/*     - observability events
+        |
+        v
+plugins.json + compare.json.plugins + report.json.plugin_report_sections
+```
 
 Core replay/compare logic stays in first-party packages; plugins are additive and optional.
 

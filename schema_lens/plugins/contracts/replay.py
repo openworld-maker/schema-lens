@@ -10,5 +10,5 @@ from schema_lens.plugins.base import BasePlugin
 class ReplayExecutorPlugin(BasePlugin):
     """Provide replay execution for custom transport/execution models."""
 
-    def replay(self, context: dict[str, Any]) -> dict[str, Any]:
+    def replay(self, run_context: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
         return {}

@@ -1,4 +1,4 @@
-schema_lens_version: 1
+solrguard_version: 1
 
 baseline:
   solr_url: "http://localhost:8983/solr"

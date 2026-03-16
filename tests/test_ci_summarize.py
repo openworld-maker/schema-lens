@@ -22,7 +22,7 @@ def test_ci_summary_contains_required_sections(tmp_path: Path):
         ],
     }
     md = build_ci_summary_markdown(compare, compare_path=tmp_path / "compare.json")
-    assert "# Schema-Lens CI Summary" in md
+    assert "# SolrGuard CI Summary" in md
     assert "## Overall Metrics" in md
     assert "## Gate Verdict" in md
     assert "## Top Regressions (10)" in md

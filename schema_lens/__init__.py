@@ -1,3 +1,3 @@
-"""schema-lens package."""
+"""solrguard package."""
 
 __version__ = "0.1.2"

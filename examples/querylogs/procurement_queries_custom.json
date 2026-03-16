@@ -1,0 +1,20 @@
+[
+  {
+    "query_text": "safety gloves",
+    "filters": ["tenant:procurement", "in_stock:true"],
+    "tenant": "procurement",
+    "query_class": "catalog"
+  },
+  {
+    "query_text": "industrial drill",
+    "filters": ["tenant:procurement", "category:tools"],
+    "tenant": "procurement",
+    "query_class": "high_value"
+  },
+  {
+    "query_text": "warehouse scanner",
+    "filters": ["tenant:logistics", "in_stock:true"],
+    "tenant": "logistics",
+    "query_class": "catalog"
+  }
+]

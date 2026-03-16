@@ -6,18 +6,30 @@ from typing import Any
 
 
 _PROM_HELP = {
-    "schema_lens_runs_total": "Total schema-lens runs observed",
-    "schema_lens_runs_failed_total": "Total failed schema-lens runs observed",
-    "schema_lens_high_risk_queries_total": "Total high-risk queries observed across runs",
-    "schema_lens_gate_failures_total": "Total gate failures observed",
-    "schema_lens_p95_latency_regression_pct": "Latest run p95 latency regression percent",
-    "schema_lens_cache_eviction_regression_pct": "Latest run cache eviction regression percent",
+    "solrguard_runs_total": "Total SolrGuard runs observed",
+    "solrguard_runs_failed_total": "Total failed SolrGuard runs observed",
+    "solrguard_high_risk_queries_total": "Total high-risk queries observed across runs",
+    "solrguard_gate_failures_total": "Total gate failures observed",
+    "solrguard_p95_latency_regression_pct": "Latest run p95 latency regression percent",
+    "solrguard_cache_eviction_regression_pct": "Latest run cache eviction regression percent",
+    "schema_lens_runs_total": "Legacy alias metric: total SolrGuard runs observed",
+    "schema_lens_runs_failed_total": "Legacy alias metric: total failed SolrGuard runs observed",
+    "schema_lens_high_risk_queries_total": "Legacy alias metric: high-risk queries observed across runs",
+    "schema_lens_gate_failures_total": "Legacy alias metric: gate failures observed",
+    "schema_lens_p95_latency_regression_pct": "Legacy alias metric: latest run p95 latency regression percent",
+    "schema_lens_cache_eviction_regression_pct": "Legacy alias metric: latest run cache eviction regression percent",
 }
 
 
 class PrometheusMetrics:
     def __init__(self) -> None:
         self.values: dict[str, float] = {
+            "solrguard_runs_total": 0.0,
+            "solrguard_runs_failed_total": 0.0,
+            "solrguard_high_risk_queries_total": 0.0,
+            "solrguard_gate_failures_total": 0.0,
+            "solrguard_p95_latency_regression_pct": 0.0,
+            "solrguard_cache_eviction_regression_pct": 0.0,
             "schema_lens_runs_total": 0.0,
             "schema_lens_runs_failed_total": 0.0,
             "schema_lens_high_risk_queries_total": 0.0,
@@ -35,13 +47,19 @@ class PrometheusMetrics:
         p95_latency_regression_pct: float,
         cache_eviction_regression_pct: float,
     ) -> None:
+        self.values["solrguard_runs_total"] += 1
         self.values["schema_lens_runs_total"] += 1
         if failed:
+            self.values["solrguard_runs_failed_total"] += 1
             self.values["schema_lens_runs_failed_total"] += 1
+        self.values["solrguard_high_risk_queries_total"] += float(max(high_risk_queries, 0))
         self.values["schema_lens_high_risk_queries_total"] += float(max(high_risk_queries, 0))
         if gate_failed:
+            self.values["solrguard_gate_failures_total"] += 1
             self.values["schema_lens_gate_failures_total"] += 1
+        self.values["solrguard_p95_latency_regression_pct"] = float(p95_latency_regression_pct)
         self.values["schema_lens_p95_latency_regression_pct"] = float(p95_latency_regression_pct)
+        self.values["solrguard_cache_eviction_regression_pct"] = float(cache_eviction_regression_pct)
         self.values["schema_lens_cache_eviction_regression_pct"] = float(cache_eviction_regression_pct)
 
     def render_text(self) -> str:

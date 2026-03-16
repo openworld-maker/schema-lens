@@ -46,21 +46,21 @@ jobs:
             sleep 2
           done
           make demo-setup
-      - name: Run schema-lens scenario
+      - name: Run solrguard scenario
         run: |
-          schema-lens run examples/changesets/prod_realism_example.yaml --out out/ci
+          solrguard run examples/changesets/prod_realism_example.yaml --out out/ci
       - name: Gate
         run: |
-          schema-lens gate --compare out/ci/compare.json --policy examples/policy/gate_default.yaml || test $? -eq 2
+          solrguard gate --compare out/ci/compare.json --policy examples/policy/gate_default.yaml || test $? -eq 2
       - name: Build CI summary
         run: |
-          schema-lens ci summarize --compare out/ci/compare.json --policy examples/policy/gate_default.yaml --out out/ci/summary.md
+          solrguard ci summarize --compare out/ci/compare.json --policy examples/policy/gate_default.yaml --out out/ci/summary.md
           cat out/ci/summary.md
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: schema-lens-ci-artifacts
+          name: solrguard-ci-artifacts
           path: out/ci
           if-no-files-found: warn
       - name: Post PR comment
@@ -71,7 +71,7 @@ jobs:
             const fs = require('fs');
             const body = fs.existsSync('out/ci/summary.md')
               ? fs.readFileSync('out/ci/summary.md', 'utf8')
-              : 'Schema-Lens summary missing.';
+              : 'SolrGuard summary missing.';
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,

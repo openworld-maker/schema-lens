@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Schema Lens Report</title>
+  <title>SolrGuard Report</title>
   <style>
     :root {
       --bg: #f4f6f8;
@@ -47,12 +47,26 @@
     }
     details { margin-bottom: 10px; }
     summary { cursor: pointer; font-weight: 600; }
+    .plugin-section {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      margin-bottom: 10px;
+      background: #fefefe;
+    }
+    .plugin-section h3 {
+      margin: 0 0 8px;
+      font-size: 1rem;
+    }
+    .plugin-section .plugin-html {
+      font-size: 0.95rem;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="card">
-      <h1>Schema Lens Report</h1>
+      <h1>SolrGuard Report</h1>
       <p class="muted">Run ID: {{ report.run_manifest.run_id }}</p>
       <p class="muted">Started: {{ report.run_manifest.started_at }} | Ended: {{ report.run_manifest.ended_at }}</p>
       <p class="muted">Snapshot Hash: {{ report.run_manifest.baseline.snapshot_hash if report.run_manifest.baseline else "n/a" }}</p>
@@ -173,8 +187,20 @@
         <summary>[{{ finding.severity }}] {{ finding.code }} - {{ finding.message }}</summary>
         <pre>{{ finding }}</pre>
       </details>
+    {% endfor %}
+  </div>
+
+    {% if report.plugin_report_sections.html %}
+    <div class="card">
+      <h2>Plugin Sections</h2>
+      {% for block in report.plugin_report_sections.html %}
+      <div class="plugin-section">
+        <h3>{{ block.plugin }}</h3>
+        <div class="plugin-html">{{ block.html|safe }}</div>
+      </div>
       {% endfor %}
     </div>
+    {% endif %}
 
     <div class="card">
       <h2>Query Rewrite Impact</h2>

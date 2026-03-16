@@ -94,10 +94,14 @@ def resolve_auth_material(
         plugin_name = str(cfg.get("provider", "")).strip()
         if not plugin_name:
             raise AuthResolutionError(f"{mode} auth requires provider plugin name")
+        plugin_cfg = cfg.get("plugin_config", {})
+        if not isinstance(plugin_cfg, dict):
+            plugin_cfg = {}
         for plugin in auth_plugins or []:
             if plugin.metadata.name != plugin_name:
                 continue
-            payload = plugin.build_auth(plugin_context or {})
+            plugin.validate_config(plugin_cfg)
+            payload = plugin.build_request_auth(plugin_cfg, plugin_context or {})
             if not isinstance(payload, dict):
                 raise AuthResolutionError(f"auth plugin '{plugin_name}' returned non-dict")
             headers = payload.get("headers", {})

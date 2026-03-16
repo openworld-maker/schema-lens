@@ -1,4 +1,4 @@
-"""Sample report widget plugin for schema-lens."""
+"""Sample report widget plugin for SolrGuard."""
 
 from __future__ import annotations
 

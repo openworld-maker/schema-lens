@@ -3,14 +3,14 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "schema-lens"
+name = "solrguard"
 version = "0.2.0"
-description = "Schema Evolution & Impact Simulator for Solr"
+description = "Search Change Governance toolkit for Apache Solr"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [
-  { name = "Schema Lens Contributors" }
+  { name = "SolrGuard Contributors" }
 ]
 dependencies = [
   "typer>=0.12.3",
@@ -28,13 +28,14 @@ dev = [
 ]
 
 [project.scripts]
+solrguard = "schema_lens.cli:app"
 schema-lens = "schema_lens.cli:app"
 
 [tool.setuptools]
 include-package-data = true
 
 [tool.setuptools.packages.find]
-include = ["schema_lens*"]
+include = ["schema_lens*", "solrguard*"]
 
 [tool.setuptools.package-data]
 schema_lens = ["report/templates/*.j2"]

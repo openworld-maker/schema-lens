@@ -1,13 +1,21 @@
 enabled: true
-strict: false
+strict_mode: false
+load_builtin: true
 entry_points: true
 entry_point_group: schema_lens.plugins
-paths:
-  - ./examples/plugins/sample_query_source
-  - ./examples/plugins/sample_gate
-  - ./examples/plugins/sample_report_widget
-enable_plugins:
+directories:
+  - ./sample_query_source
+  - ./sample_gate
+  - ./sample_report
+enabled_plugins:
   - sample_query_source
   - sample_gate
-  - sample_report_widget
-disable_plugins: []
+  - sample_report
+config:
+  sample_query_source:
+    path: examples/querylogs/procurement_queries_custom.json
+  sample_gate:
+    overlap_threshold: 0.5
+    failure_pct: 30
+  sample_report:
+    group_by: tenant

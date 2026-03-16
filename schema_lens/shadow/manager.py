@@ -117,7 +117,7 @@ def create_shadow(
     baseline_configset = collection_config_name(client, baseline_collection)
     if has_configset_updates(changes):
         try:
-            with tempfile.TemporaryDirectory(prefix="schema-lens-configset-") as tmp:
+            with tempfile.TemporaryDirectory(prefix="solrguard-configset-") as tmp:
                 workspace = Path(tmp)
                 configset_root = _materialize_baseline_configset(
                     client=client,

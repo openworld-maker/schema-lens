@@ -1,16 +1,53 @@
-# schema-lens
+# SolrGuard
 
-`schema-lens` is a Solr schema/config impact simulator.
+Search Change Governance for Apache Solr.
 
-It runs a change plan against a shadow collection, replays baseline vs shadow queries, computes
-ranking/facet/filter/sort deltas, captures optional explain + rewrite debug diffs, and emits
-reproducible JSON/HTML artifacts for human review and CI gates.
+SolrGuard helps teams safely evaluate Solr schema/config/relevance changes with compatibility
+detection, policy gates, approvals and exceptions, rollout planning, privacy-safe artifacts, and
+operational integrations for CI/CD and platform workflows.
 
 Current version: `v0.2.0`
 
+SolrGuard is the new primary name. `schema-lens` remains available as a legacy CLI alias and
+`schema_lens` remains the stable Python import path in this release.
+
+## Quick value
+
+- Detect Solr version and capability compatibility before rollout.
+- Simulate and compare change impact with segment-aware risk views.
+- Enforce policy gates with auditable approvals and time-bound exceptions.
+- Produce privacy-safe, export-safe governance artifacts.
+- Integrate with CI/CD, observability, Docker, Helm, and API service mode.
+
+## Start here
+
+- One-command local evaluator:
+  - `./scripts/first_time_evaluator.sh`
+- [Quickstart](#quickstart-basic)
+- [Enterprise quickstart](#quickstart-enterprise-governance-mode)
+- [Compatibility matrix](docs/enterprise/compatibility-matrix.md)
+- [Governance guide](docs/enterprise/policies.md)
+- [Deployment guide](docs/deployment.md)
+- [Example outputs](docs/example-outputs.md)
+- [Roadmap](docs/roadmap.md)
+- [Examples index](examples/README.md)
+- [Docs index](docs/README.md)
+
+## Formerly Schema-Lens
+
+- `solrguard` is now the primary CLI and product name.
+- `schema-lens` remains available as a legacy CLI alias for backward compatibility.
+- Internal Python import path remains `schema_lens` in this release to minimize migration risk.
+
 ## Table of contents
 
+- [What is SolrGuard?](#what-is-solrguard)
 - [Why it exists](#why-it-exists)
+- [Why SolrGuard](#why-solrguard)
+- [Who is it for?](#who-is-it-for)
+- [Enterprise evaluation workflow](#enterprise-evaluation-workflow)
+- [Safe Evaluation In Enterprise Solr Environments](#safe-evaluation-in-enterprise-solr-environments)
+- [Feature matrix](#feature-matrix)
 - [Core capabilities](#core-capabilities)
 - [Advanced features](#advanced-features)
 - [End-to-end flow](#end-to-end-flow)
@@ -19,12 +56,15 @@ Current version: `v0.2.0`
 - [Quickstart (basic)](#quickstart-basic)
 - [Quickstart (synonym rewrite impact)](#quickstart-synonym-rewrite-impact)
 - [Quickstart (vector and hybrid simulation)](#quickstart-vector-and-hybrid-simulation)
+- [Quickstart (enterprise governance mode)](#quickstart-enterprise-governance-mode)
 - [CLI reference](#cli-reference)
+- [Compatibility and Migration](#compatibility-and-migration)
 - [Changeset reference](#changeset-reference)
 - [Output artifacts](#output-artifacts)
 - [Plugin SDK](#plugin-sdk)
 - [Security Mode](#security-mode)
 - [Solr Compatibility](#solr-compatibility)
+- [Enterprise Compatibility Contract](#enterprise-compatibility-contract)
 - [API Server Mode](#api-server-mode)
 - [Observability](#observability)
 - [Governance](#governance)
@@ -34,9 +74,17 @@ Current version: `v0.2.0`
 - [Enterprise Packaging](#enterprise-packaging)
 - [Quality gate and CI usage](#quality-gate-and-ci-usage)
 - [Architecture](#architecture)
+- [Documentation map](#documentation-map)
+- [Examples map](#examples-map)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Safety notes](#safety-notes)
+
+## What is SolrGuard?
+
+SolrGuard is a local-first governance toolkit for safe Solr change evaluation and rollout decisions.
+It combines simulation, compatibility checks, policy controls, and operational artifacts so teams can
+move faster without losing release safety.
 
 ## Why it exists
 
@@ -48,7 +96,70 @@ way to answer:
 3. Did parser/rewrite behavior change (synonyms, clause shape, mm pressure)?
 4. Should CI block rollout?
 
-`schema-lens` provides this as a local-first CLI workflow.
+SolrGuard provides this as a local-first CLI workflow.
+
+## Why SolrGuard
+
+- deterministic governance artifacts for release decisions
+- compatibility and fallback visibility before rollout
+- policy-as-code + CI gate integration
+- auditable approvals/exceptions/promotion metadata
+- security/privacy controls suitable for enterprise traffic data
+- rollout verification and post-cutover checks for release safety
+- operational telemetry for SRE and platform governance workflows
+
+## Who is it for?
+
+- Relevance engineers: quantify ranking/query parser impact before production rollout.
+- Solr platform owners: enforce compatibility and policy contracts across environments.
+- SRE and release managers: gate deployments with auditable risk, rollback, and verification artifacts.
+- Enterprise architecture/governance teams: enforce approval and exception controls with traceability.
+- Consulting and migration teams: standardize Solr 8/9/10 readiness evaluation workflows.
+
+## Enterprise evaluation workflow
+
+```text
+1) Detect target version/capabilities
+2) Compare baseline vs candidate behavior
+3) Evaluate policy bundle
+4) Attach approvals/exceptions metadata
+5) Generate export-safe governance artifacts
+6) Produce rollout + rollback plan
+7) Verify post-cutover state
+```
+
+## Safe Evaluation In Enterprise Solr Environments
+
+Governance workflow (high-level):
+
+```text
+Change Proposal
+   -> Secure Simulation (shadow replay + compatibility detection)
+   -> Policy Evaluation (global + segment-aware)
+   -> Approval/Exception Metadata
+   -> Rollout Plan (canary/alias/rollback)
+   -> Post-cutover Verification
+```
+
+## Feature matrix
+
+| Capability | Available | Notes | Enterprise relevance |
+|---|---|---|---|
+| Solr version detection | Yes | Solr 8/9 + forward-ready unknown handling | Prevents unsafe assumptions |
+| Capability detection | Yes | Flags support/degraded fallback paths | Explains why behavior differs |
+| Schema/config comparison | Yes | Replay/compare with ranking + non-ranking diff metrics | Core release risk evidence |
+| Policy evaluation | Yes | YAML policy bundles and gate evaluator | Deterministic pass/fail in CI |
+| Approvals/exceptions | Yes | Approver metadata + expiring exceptions | Auditable governance controls |
+| Security mode | Yes | Basic/Bearer/mTLS + redaction/no-sensitive mode | Safer enterprise execution |
+| Privacy-safe artifacts | Yes | Masking/hashing/export-safe summaries | Compliance-oriented sharing |
+| Segment-aware reporting | Yes | Tenant/region/locale grouping and ranking | Detects localized regressions |
+| Prometheus metrics | Yes | `solrguard_*` primary + legacy aliases | SRE visibility |
+| OpenTelemetry traces | Yes | Stage-level spans without secret leakage | Production troubleshooting |
+| Webhook notifications | Yes | Run/gate event delivery with retries | External orchestration integration |
+| GitOps rollout planning | Yes | Diff/canary/alias-swap/rollback plans | Safer production promotions |
+| Docker deployment | Yes | Runtime image and deployment docs | Portable runtime |
+| Helm deployment | Yes | `helm/solrguard` primary chart path | Cluster operations ready |
+| API server mode | Yes | Run/status/artifact endpoints | Dashboard and portal integration |
 
 ## Core capabilities
 
@@ -136,7 +247,7 @@ changes:
 
 Notes:
 
-- In SolrCloud environments where uploaded configsets are untrusted, schema-lens can promote the
+- In SolrCloud environments where uploaded configsets are untrusted, solrguard can promote the
   uploaded configset to a trusted clone (`promote_uploaded_configset_trusted: true`, default).
 - `target.files[].path` supports both `conf/<file>` and root configset style where applicable.
 
@@ -163,7 +274,7 @@ Reported outputs include:
 - rewrite risk flags (`REWRITE_CLAUSE_SPIKE`, `SYNONYM_EXPANSION_CHANGED`,
   `PARSED_QUERY_SHAPE_CHANGED`)
 
-If `debug=results` does not include parsed query fields on your Solr setup, schema-lens
+If `debug=results` does not include parsed query fields on your Solr setup, solrguard
 automatically falls back to `debugQuery=true` for rewrite extraction.
 
 ### 3) Production realism bundle
@@ -251,7 +362,7 @@ report callouts such as p95 latency regressions.
 
 ### 6) Deterministic diagnosis and recommendations
 
-Schema-Lens can convert diff evidence into deterministic root-cause findings and action-oriented
+SolrGuard can convert diff evidence into deterministic root-cause findings and action-oriented
 next steps:
 
 - root causes:
@@ -346,10 +457,10 @@ make dev-up
 make demo-setup
 ```
 
-3. Run schema-lens:
+3. Run solrguard:
 
 ```bash
-schema-lens run examples/changesets/fieldtype-change.yaml --out out/demo
+solrguard run examples/changesets/fieldtype-change.yaml --out out/demo
 ```
 
 4. Inspect output:
@@ -379,7 +490,7 @@ make demo-setup-procurement
 3. Run rewrite-impact changeset:
 
 ```bash
-schema-lens run examples/changesets/procurement-synonym-rewrite.yaml --out out/procurement_demo
+solrguard run examples/changesets/procurement-synonym-rewrite.yaml --out out/procurement_demo
 ```
 
 4. Validate rewrite flags:
@@ -405,7 +516,7 @@ make demo-setup-vector
 3. Run vector/hybrid scenario pack:
 
 ```bash
-schema-lens run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
+solrguard run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
 ```
 
 4. Inspect vector outputs:
@@ -416,49 +527,99 @@ cat out/vector_demo/hybrid_sensitivity.json
 open out/vector_demo/report.html
 ```
 
+## Quickstart (enterprise governance mode)
+
+1. Validate enterprise changeset:
+
+```bash
+solrguard validate examples/enterprise/governance/prod_promotion_changeset.yaml
+```
+
+2. Run governance simulation:
+
+```bash
+solrguard run examples/enterprise/governance/prod_promotion_changeset.yaml --out out/enterprise_demo
+```
+
+3. Evaluate release policy:
+
+```bash
+solrguard gate --compare out/enterprise_demo/compare.json --policy examples/policy/perf_gate_default.yaml
+```
+
+4. Inspect compatibility contract:
+
+```bash
+solrguard detect-capabilities --from-file examples/compat/solr9_system_info.json
+solrguard compatibility --from-file examples/compat/solr9_system_info.json
+```
+
 ## CLI reference
 
 ### Primary commands
 
-- `schema-lens validate <changeset.yaml>`
-- `schema-lens inspect --solr-url URL --collection NAME --out PATH`
-- `schema-lens snapshot --solr-url URL --collection NAME --out DIR`
-- `schema-lens run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup] [--scenario NAME ...] [--enable-sensitivity/--no-enable-sensitivity] [--weights CSV] [--vector-dimension-override INT]`
-- `schema-lens replay --baseline-solr-url ... --baseline-collection ... --shadow-solr-url ... --shadow-collection ... --queries ... --k ... --out ...`
-- `schema-lens compare --replay PATH --k K --out PATH`
-- `schema-lens report --compare PATH --manifest PATH --out DIR`
-- `schema-lens api serve --out out/api --host 127.0.0.1 --port 8090`
+- `solrguard validate <changeset.yaml>`
+- `solrguard inspect --solr-url URL --collection NAME --out PATH`
+- `solrguard snapshot --solr-url URL --collection NAME --out DIR`
+- `solrguard run <changeset.yaml> --out DIR [--snapshot DIR] [--k K] [--cleanup/--no-cleanup] [--scenario NAME ...] [--enable-sensitivity/--no-enable-sensitivity] [--weights CSV] [--vector-dimension-override INT]`
+- `solrguard replay --baseline-solr-url ... --baseline-collection ... --shadow-solr-url ... --shadow-collection ... --queries ... --k ... --out ...`
+- `solrguard compare --replay PATH --k K --out PATH`
+- `solrguard report --compare PATH --manifest PATH --out DIR`
+- `solrguard detect-capabilities --solr-url URL | --from-file system_info.json`
+- `solrguard compatibility --target URL | --from-file system_info.json`
+- `solrguard api serve --data-dir .solrguard_api --host 127.0.0.1 --port 8080`
 
 ### Shadow lifecycle
 
-- `schema-lens shadow create <changeset.yaml> --out shadow.json`
-- `schema-lens shadow index --shadow shadow.json --docs docs.jsonl`
+- `solrguard shadow create <changeset.yaml> --out shadow.json`
+- `solrguard shadow index --shadow shadow.json --docs docs.jsonl`
 
 ### Query/doc source tooling
 
-- `schema-lens queries extract --from <logfile> --out <queries.jsonl> [--max N] [--sample top|reservoir] [--seed INT] [--sanitize/--no-sanitize]`
-- `schema-lens docs sample --solr-url URL --collection NAME --mode export|cursormark --query "*:*" --fl "*" --sort "id asc" --sample-n N --batch-size N --out PATH`
+- `solrguard queries extract --from <logfile> --out <queries.jsonl> [--max N] [--sample top|reservoir] [--seed INT] [--sanitize/--no-sanitize]`
+- `solrguard docs sample --solr-url URL --collection NAME --mode export|cursormark --query "*:*" --fl "*" --sort "id asc" --sample-n N --batch-size N --out PATH`
 
 ### Golden + CI helpers
 
-- `schema-lens golden add --q "..." --expect-id DOC123 --out golden.jsonl`
-- `schema-lens golden discover --from queries.jsonl --top 50 --out golden.jsonl`
-- `schema-lens gate --compare compare.json --policy policy.yaml`
-- `schema-lens ci summarize --compare compare.json --out summary.md [--policy policy.yaml]`
+- `solrguard golden add --q "..." --expect-id DOC123 --out golden.jsonl`
+- `solrguard golden discover --from queries.jsonl --top 50 --out golden.jsonl`
+- `solrguard gate --compare compare.json --policy policy.yaml`
+- `solrguard ci summarize --compare compare.json --out summary.md [--policy policy.yaml]`
 
 ### Analysis and operations helpers
 
-- `schema-lens recommend --run out/run_xxx --out out/recommendations.json`
-- `schema-lens compare-env --env1 examples/envs/prod_us.yaml --env2 examples/envs/prod_eu.yaml --queries examples/queries/env_compare_queries.jsonl --out out/env_compare`
-- `schema-lens serve --run out/demo --port 8080`
-- `schema-lens serve --compare out/env_compare/compare.json --port 8080`
-- `schema-lens serve --api-url http://127.0.0.1:8090 --run-id <id> --port 8080`
-- `schema-lens monitor --baseline-snapshot out/demo --queries examples/queries/env_compare_queries.jsonl --out out/monitor`
-- `schema-lens rollout git-drift --solr-url URL --collection NAME --local-configset-dir DIR --out drift.json`
-- `schema-lens rollout canary-plan --baseline-collection NAME --canary-collection NAME --out canary_plan.json`
-- `schema-lens rollout alias-swap-plan --alias NAME --from-collection SRC --to-collection DST --out alias_plan.json [--execute --solr-url URL]`
-- `schema-lens rollout rollback-plan --alias NAME --previous-collection SRC --out rollback_plan.json`
-- `schema-lens rollout verify-post-cutover --canary-compare canary_compare.json --prod-compare prod_compare.json --out verify.json`
+- `solrguard recommend --run out/run_xxx --out out/recommendations.json`
+- `solrguard compare-env --env1 examples/envs/prod_us.yaml --env2 examples/envs/prod_eu.yaml --queries examples/queries/env_compare_queries.jsonl --out out/env_compare`
+- `solrguard serve --run out/demo --port 8080`
+- `solrguard serve --compare out/env_compare/compare.json --port 8080`
+- `solrguard serve --api-url http://127.0.0.1:8090 --run-id <id> --port 8080`
+- `solrguard monitor --baseline-snapshot out/demo --queries examples/queries/env_compare_queries.jsonl --out out/monitor`
+- `solrguard rollout git-drift --solr-url URL --collection NAME --local-configset-dir DIR --out drift.json`
+- `solrguard rollout canary-plan --baseline-collection NAME --canary-collection NAME --out canary_plan.json`
+- `solrguard rollout alias-swap-plan --alias NAME --from-collection SRC --to-collection DST --out alias_plan.json [--execute --solr-url URL]`
+- `solrguard rollout rollback-plan --alias NAME --previous-collection SRC --out rollback_plan.json`
+- `solrguard rollout verify-post-cutover --canary-compare canary_compare.json --prod-compare prod_compare.json --out verify.json`
+
+## Compatibility and Migration
+
+Backward compatibility in this release:
+
+- `schema-lens` CLI alias is retained and maps to `solrguard`.
+- internal Python package path remains `schema_lens`.
+- preferred changeset key is `solrguard_version`; legacy `schema_lens_version` is retained.
+- legacy API auth header `x-schema-lens-token` is still accepted; preferred header is `x-solrguard-token`.
+- legacy Prometheus metrics `schema_lens_*` are retained; `solrguard_*` is primary.
+- legacy Helm chart path `helm/schema-lens` is retained; `helm/solrguard` is primary.
+
+Recommended migration path:
+
+1. Switch scripts and CI jobs from `schema-lens` to `solrguard`.
+2. Keep existing imports unchanged for now (`schema_lens`).
+3. Move changesets to `solrguard_version` key.
+4. Track migration/deprecation timelines:
+   - [`docs/migration-from-schema-lens.md`](docs/migration-from-schema-lens.md)
+   - [`docs/deprecation-schedule.md`](docs/deprecation-schedule.md)
+   - [`docs/major-version-module-migration.md`](docs/major-version-module-migration.md)
 
 ## Changeset reference
 
@@ -519,18 +680,43 @@ Plugin support is optional and config-driven. Enable it in the changeset:
 ```yaml
 plugins:
   enabled: true
-  strict: false
-  config: ./examples/plugins/plugins_runtime.yaml
+  directories:
+    - "./examples/plugins"
+  load_builtin: true
+  enabled_plugins:
+    - sample_query_source
+    - sample_gate
+    - sample_report
+  strict_mode: false
+  config:
+    sample_query_source:
+      path: "examples/querylogs/procurement_queries_custom.json"
+    sample_gate:
+      overlap_threshold: 0.5
+      failure_pct: 30
+    sample_report:
+      group_by: "tenant"
 ```
 
-Supported extension-point contracts include auth, query/doc source, replay executor, diff analyzer,
-gate evaluator, report widget/renderer, observability exporter, and rollout provider.
+Supported extension-point contracts include:
+
+- auth providers
+- query sources
+- document sources
+- replay executors
+- diff analyzers
+- root-cause and recommendation rules
+- gate evaluators
+- report renderers/widgets
+- rollout providers
+- observability exporters
 
 Plugin loading supports:
 
+- built-in plugins (`plugins.load_builtin`)
+- local plugin paths (`plugins.directories`)
 - Python entry points (`schema_lens.plugins`)
-- Local plugin paths (`plugins.paths`)
-- Explicit enable/disable lists
+- explicit activation (`plugins.enabled_plugins`)
 
 Lifecycle hooks:
 
@@ -541,16 +727,29 @@ Lifecycle hooks:
 
 Compatibility/versioning policy:
 
-- Plugins declare `schema_lens_version` in metadata.
+- Plugins declare `compatible_schema_lens_version` in metadata (`schema_lens_version` is still accepted).
 - Incompatible plugins are skipped and reported in `plugins.json`.
-- `plugins.strict: true` turns plugin load/compat/execute errors into run-blocking failures.
+- `plugins.strict_mode: true` turns plugin load/compat/execute errors into run-blocking failures.
+
+Plugin runtime artifacts:
+
+- `out/<run>/plugins/<plugin_name>/result.json`
+- `out/<run>/plugins/<plugin_name>/debug.json`
+- `out/<run>/plugins/<plugin_name>/notes.txt`
+- `plugins.json`, `compare.json.plugins`, and `report.json.plugin_report_sections`
+
+Plugin CLI:
+
+- `solrguard plugins list --changeset examples/changesets/plugin-sdk-demo.yaml`
+- `solrguard plugins validate --changeset examples/changesets/plugin-sdk-demo.yaml`
+- `solrguard plugins inspect sample_gate --changeset examples/changesets/plugin-sdk-demo.yaml`
 
 Developer guide and examples:
 
-- [docs/plugin-sdk.md](docs/plugin-sdk.md)
+- [docs/plugin_sdk.md](docs/plugin_sdk.md)
 - `examples/plugins/sample_query_source/`
 - `examples/plugins/sample_gate/`
-- `examples/plugins/sample_report_widget/`
+- `examples/plugins/sample_report/`
 
 ## Security Mode
 
@@ -600,7 +799,7 @@ Examples:
 
 ## Solr Compatibility
 
-`schema-lens` detects Solr version from `/admin/info/system` and records capabilities in
+`solrguard` detects Solr version from `/admin/info/system` and records capabilities in
 `compat.json` and `run_manifest.json`.
 
 Supported compatibility targets:
@@ -621,58 +820,132 @@ Reference fixtures:
 - `examples/compat/solr9_system_info.json`
 - `examples/compat/solr10_system_info.json`
 
+Compatibility CLI:
+
+```bash
+solrguard detect-capabilities --solr-url http://localhost:8983/solr
+solrguard compatibility --target http://localhost:8983/solr
+```
+
+## Enterprise Compatibility Contract
+
+- deterministic capability flags with explicit `missing_capabilities`
+- support-tier framing (`supported_with_fallbacks`, `recommended`, `forward_ready`, `unknown`)
+- fallback reporting with human-readable actions
+- fixture-driven tests for Solr 8/9/10 payloads
+
+See:
+
+- [docs/compatibility.md](docs/compatibility.md)
+- [docs/enterprise/compatibility-matrix.md](docs/enterprise/compatibility-matrix.md)
+
 ## API Server Mode
 
 Run a local-first REST service:
 
 ```bash
-schema-lens api serve --out out/api --host 127.0.0.1 --port 8090
+solrguard api serve --data-dir .solrguard_api --host 127.0.0.1 --port 8080
+```
+
+Optional enterprise-oriented runtime modes:
+
+```bash
+solrguard api serve \
+  --job-store sqlite \
+  --sqlite-path .solrguard_api/jobs.db \
+  --worker-mode external
 ```
 
 Core endpoints:
 
-- `POST /runs`
-- `GET /runs/{id}`
-- `GET /runs/{id}/artifacts`
-- `GET /runs/{id}/artifacts/{name}`
-- `GET /dashboard/runs`
-- `GET /dashboard/runs/{id}/overview`
-- `GET /dashboard/runs/{id}/query-explorer`
-- `POST /compare-env`
-- `POST /gate`
 - `GET /health`
+- `GET /health/details`
 - `GET /capabilities`
+- `GET /plugins`
+- `POST /runs`
+- `GET /runs`
+- `GET /runs/{job_id}`
+- `GET /runs/{job_id}/summary`
+- `POST /compare-env`
+- `GET /compare-env/{job_id}`
+- `POST /gates`
+- `GET /gates/{job_id}`
+- `GET /artifacts/{job_id}`
+- `GET /artifacts/{job_id}/{artifact_name}`
+- compatibility: `POST /gate`, `GET /runs/{job_id}/artifacts/*`
 
 Create a run:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8090/runs \
+curl -sS -X POST http://127.0.0.1:8080/runs \
   -H "content-type: application/json" \
-  -d @examples/api/create_run_payload.json
+  -d @examples/api/create_run_from_path.json
+```
+
+Create a run from inline changeset:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/runs \
+  -H "content-type: application/json" \
+  -d @examples/api/create_run_inline.json
 ```
 
 Compare environments:
 
 ```bash
-curl -sS -X POST http://127.0.0.1:8090/compare-env \
+curl -sS -X POST http://127.0.0.1:8080/compare-env \
   -H "content-type: application/json" \
-  -d @examples/api/compare_env_payload.json
+  -d @examples/api/compare_env_request.json
 ```
 
-Upload-style submission is supported by including `changeset_file_content` and optional
-`changeset_file_name` in the JSON payload.
+Gate evaluation:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/gates \
+  -H "content-type: application/json" \
+  -d @examples/api/gate_request.json
+```
 
 Dashboard integration:
 
 ```bash
-schema-lens serve --api-url http://127.0.0.1:8090 --run-id <run-id> --port 8080
+solrguard serve --api-url http://127.0.0.1:8080 --run-id <run-id> --port 8080
+```
+
+Inspect storage and runtime config:
+
+```bash
+solrguard api inspect --data-dir .solrguard_api
 ```
 
 Local-first security:
 
 - service defaults to local-only mode
-- auth middleware hooks can be layered in via app factory wiring
-- secrets are handled by existing security/redaction settings in run execution
+- pluggable auth provider + RBAC policy hooks are supported in app factory wiring
+- request audit trail is written to `.solrguard_api/logs/api_audit.jsonl`
+- secrets are redacted in stored request snapshots for obvious credential fields
+- artifacts are served only by tracked job/artifact mappings (path traversal protected)
+
+Additional docs:
+
+- `docs/api_server.md`
+- `docs/roadmap_api_server.md`
+- `docs/compatibility.md`
+- `docs/enterprise/README.md`
+- `docs/migration-from-schema-lens.md`
+- `docs/brand-positioning.md`
+- `docs/release-notes-solrguard.md`
+- `docs/deprecation-schedule.md`
+- `docs/major-version-module-migration.md`
+- `docs/enterprise/security.md`
+- `docs/enterprise/compatibility-matrix.md`
+- `docs/enterprise/observability.md`
+- `docs/enterprise/policies.md`
+- `docs/enterprise/approvals-and-exceptions.md`
+- `docs/enterprise/gitops.md`
+- `docs/enterprise/segmentation.md`
+- `docs/enterprise/privacy.md`
+- `docs/enterprise/deployment.md`
 
 ## Observability
 
@@ -688,7 +961,7 @@ observability:
   webhooks:
     enabled: true
     urls:
-      - "http://localhost:9000/schema-lens/events"
+      - "http://localhost:9000/solrguard/events"
 ```
 
 Runtime events emitted:
@@ -700,12 +973,14 @@ Runtime events emitted:
 
 Prometheus output includes:
 
-- `schema_lens_runs_total`
-- `schema_lens_runs_failed_total`
-- `schema_lens_high_risk_queries_total`
-- `schema_lens_gate_failures_total`
-- `schema_lens_p95_latency_regression_pct`
-- `schema_lens_cache_eviction_regression_pct`
+- `solrguard_runs_total`
+- `solrguard_runs_failed_total`
+- `solrguard_high_risk_queries_total`
+- `solrguard_gate_failures_total`
+- `solrguard_p95_latency_regression_pct`
+- `solrguard_cache_eviction_regression_pct`
+
+Legacy metric names with `schema_lens_*` prefix are also emitted for backward compatibility.
 
 Examples:
 
@@ -764,20 +1039,20 @@ Supported flows:
 Example commands:
 
 ```bash
-schema-lens rollout git-drift \
+solrguard rollout git-drift \
   --solr-url http://localhost:8983/solr \
   --collection products \
   --local-configset-dir examples/configsets/procurement_v1 \
   --out out/rollout/git_drift.json
 
-schema-lens rollout canary-plan \
+solrguard rollout canary-plan \
   --baseline-collection products \
   --canary-collection products_canary \
   --traffic-sample-ratio 0.1 \
   --replay-query-count 500 \
   --out out/rollout/canary_plan.json
 
-schema-lens rollout alias-swap-plan \
+solrguard rollout alias-swap-plan \
   --alias products_live \
   --from-collection products_v1 \
   --to-collection products_v2 \
@@ -786,7 +1061,7 @@ schema-lens rollout alias-swap-plan \
 
 Execute mode is opt-in and explicitly dangerous:
 
-- `schema-lens rollout alias-swap-plan ... --execute --solr-url URL`
+- `solrguard rollout alias-swap-plan ... --execute --solr-url URL`
 
 Examples:
 
@@ -872,7 +1147,7 @@ Distribution targets included:
 
 - Python package (build with `python -m build`)
 - Docker image (`docker/Dockerfile`)
-- Helm chart (`helm/schema-lens`)
+- Helm chart (`helm/solrguard`)
 - release workflow (`.github/workflows/release.yml`)
 
 Release scripts:
@@ -891,7 +1166,7 @@ Deployment examples:
 Run policy gate:
 
 ```bash
-schema-lens gate --compare out/demo/compare.json --policy examples/policy/gate_default.yaml
+solrguard gate --compare out/demo/compare.json --policy examples/policy/gate_default.yaml
 ```
 
 Exit codes:
@@ -903,7 +1178,7 @@ Exit codes:
 Generate PR-friendly markdown summary:
 
 ```bash
-schema-lens ci summarize --compare out/demo/compare.json --policy examples/policy/gate_default.yaml --out out/demo/summary.md
+solrguard ci summarize --compare out/demo/compare.json --policy examples/policy/gate_default.yaml --out out/demo/summary.md
 ```
 
 GitHub Actions workflows included:
@@ -915,6 +1190,32 @@ GitHub Actions workflows included:
 
 See [docs/architecture.md](docs/architecture.md) for the package map, stage flow, artifact model,
 and extension rules for new tracks.
+
+## Documentation map
+
+- Getting started: [docs/usage-guide.md](docs/usage-guide.md)
+- Architecture: [docs/architecture.md](docs/architecture.md)
+- Compatibility: [docs/compatibility.md](docs/compatibility.md)
+- Security: [docs/enterprise/security.md](docs/enterprise/security.md)
+- Governance: [docs/enterprise/policies.md](docs/enterprise/policies.md)
+- Rollout: [docs/enterprise/gitops.md](docs/enterprise/gitops.md)
+- Observability: [docs/enterprise/observability.md](docs/enterprise/observability.md)
+- Privacy: [docs/enterprise/privacy.md](docs/enterprise/privacy.md)
+- Deployment: [docs/deployment.md](docs/deployment.md)
+- Migration: [docs/migration-from-schema-lens.md](docs/migration-from-schema-lens.md)
+- Full docs index: [docs/README.md](docs/README.md)
+
+## Examples map
+
+- Changeset quick eval examples: `examples/changesets/`
+- API requests: `examples/api/`
+- Security mode examples: `examples/security/` and `examples/enterprise/security/`
+- Governance policy and approval examples: `examples/governance/` and `examples/enterprise/governance/`
+- Rollout orchestration examples: `examples/rollout/` and `examples/enterprise/gitops/`
+- Observability examples: `examples/observability/` and `examples/enterprise/observability/`
+- Privacy/export-safe examples: `examples/privacy/` and `examples/enterprise/privacy/`
+- Deployment examples: `examples/deploy/` and `examples/enterprise/deployment/`
+- Full examples index: [examples/README.md](examples/README.md)
 
 ## Testing
 
@@ -940,14 +1241,14 @@ make smoke-vector
 Performance example:
 
 ```bash
-.venv/bin/schema-lens run examples/changesets/perf_estimator_example.yaml --out out/perf_demo
-.venv/bin/schema-lens gate --compare out/perf_demo/compare.json --policy examples/policy/perf_gate_default.yaml
+.venv/bin/solrguard run examples/changesets/perf_estimator_example.yaml --out out/perf_demo
+.venv/bin/solrguard gate --compare out/perf_demo/compare.json --policy examples/policy/perf_gate_default.yaml
 ```
 
 Environment compare example:
 
 ```bash
-.venv/bin/schema-lens compare-env \
+.venv/bin/solrguard compare-env \
   --env1 examples/envs/prod_us.yaml \
   --env2 examples/envs/prod_eu.yaml \
   --queries examples/queries/env_compare_queries.jsonl \
@@ -988,6 +1289,52 @@ their own dedicated Docker-backed end-to-end tests:
 - recommendations
 - LTR analysis
 
+## Roadmap snapshot
+
+Available now:
+
+- compatibility detection and fallback reporting
+- secure execution and privacy-safe artifact controls
+- policy gates with approvals/exceptions metadata
+- rollout planning and post-cutover verification
+- API service mode and deployment assets
+
+Next:
+
+- richer plugin SDK extension packs for policy and compatibility detectors
+- expanded API service multi-user controls and auth/RBAC middleware
+- broader enterprise reference dashboards and CI templates
+
+Future direction:
+
+- OIDC/SSO integrations
+- live drift monitoring service mode
+- vector/hybrid and LTR governance expansion
+
+Roadmap docs:
+
+- `docs/roadmap_api_server.md`
+- `docs/enterprise/backlog_next_issues.md`
+
+## Contributing
+
+Contributions are welcome from Solr operators, relevance engineers, and platform teams.
+
+Good first contribution areas:
+
+- add compatibility fixtures for Solr distributions
+- add policy bundle examples and test fixtures
+- add observability dashboards and webhook adapters
+- improve docs and runnable enterprise examples
+- harden deployment and CI templates
+
+Developer setup and contribution workflow:
+
+- install: `pip install -e ".[dev]"`
+- run tests: `pytest -q -m "not integration"`
+- lint: `ruff check .`
+- open a PR with artifact or fixture updates when behavior changes
+
 ## Troubleshooting
 
 - Configset clone/create returns `401`:
@@ -1002,7 +1349,7 @@ their own dedicated Docker-backed end-to-end tests:
   - use `debug_mode: results` if your Solr setup suppresses `debugQuery=true` fields.
 - Query replay errors (`400`):
   - logs may contain unsupported params/fields in the target collection.
-- `schema-lens serve` fails with FastAPI import errors:
+- `solrguard serve` fails with FastAPI import errors:
   - install current dependencies again with `pip install -e ".[dev]"` so the dashboard extras are present.
 
 ## Safety notes

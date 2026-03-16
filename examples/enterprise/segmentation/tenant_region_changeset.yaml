@@ -1,0 +1,18 @@
+baseline:
+  solr_url: "http://localhost:8983/solr"
+  collection: "products"
+shadow:
+  solr_url: "http://localhost:8983/solr"
+  collection_prefix: "products_shadow"
+queries:
+  source:
+    type: file
+    path: "examples/queries/multitenant_queries.jsonl"
+segments:
+  enabled: true
+  keys: ["tenant", "region", "locale"]
+  policy:
+    rules:
+      - segment_key: "region"
+        segment_value: "eu"
+        max_high_risk_percent: 15

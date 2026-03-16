@@ -14,6 +14,8 @@ class Changeset:
 
     @property
     def version(self) -> int:
+        if "solrguard_version" in self.raw:
+            return int(self.raw.get("solrguard_version", 1))
         return int(self.raw.get("schema_lens_version", 1))
 
     @property

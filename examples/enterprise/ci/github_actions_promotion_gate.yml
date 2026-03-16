@@ -1,0 +1,17 @@
+name: solrguard-promotion-gate
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install .
+      - run: |
+          solrguard run examples/enterprise/governance/prod_promotion_changeset.yaml --out out/promotion
+          solrguard gate --compare out/promotion/compare.json --policy examples/policy/perf_gate_default.yaml

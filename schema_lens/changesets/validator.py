@@ -65,9 +65,19 @@ def _resolve_input_path(base_file: Path | None, raw_path: str) -> Path:
 def validate_changeset(changeset: Changeset, check_paths: bool = True) -> ValidationReport:
     report = ValidationReport()
     raw = changeset.raw
-    version = raw.get("schema_lens_version")
+    legacy_version = raw.get("schema_lens_version")
+    new_version = raw.get("solrguard_version")
+    version = new_version if new_version is not None else legacy_version
     if version not in (None, 1):
-        report.errors.append(f"Unsupported schema_lens_version: {version}")
+        report.errors.append(f"Unsupported changeset version: {version}")
+    if legacy_version is not None and new_version is None:
+        report.warnings.append(
+            "schema_lens_version is deprecated; prefer solrguard_version (legacy key remains supported)."
+        )
+    if legacy_version is not None and new_version is not None and legacy_version != new_version:
+        report.errors.append(
+            "schema_lens_version and solrguard_version both set with different values."
+        )
 
     required = ["baseline.solr_url", "baseline.collection"]
     for key in required:
@@ -79,11 +89,14 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         report.errors.append("data.docs_source must be an object")
         docs_source = {}
     docs_source_type = str(docs_source.get("type", "file"))
-    if docs_source_type not in {"file", "solr"}:
-        report.errors.append("data.docs_source.type must be 'file' or 'solr'")
+    if docs_source_type not in {"file", "solr", "plugin"}:
+        report.errors.append("data.docs_source.type must be 'file', 'solr', or 'plugin'")
     if docs_source_type == "file":
         if not docs_source.get("path"):
             report.errors.append("Missing required field: data.docs_source.path")
+    elif docs_source_type == "plugin":
+        if not docs_source.get("provider"):
+            report.errors.append("Missing required field: data.docs_source.provider")
     else:
         for key in ("solr_url", "collection"):
             if not docs_source.get(key):
@@ -97,10 +110,12 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
         report.errors.append("queries.source must be an object")
         query_source = {}
     query_source_type = str(query_source.get("type", "file"))
-    if query_source_type not in {"file", "log"}:
-        report.errors.append("queries.source.type must be 'file' or 'log'")
-    if not query_source.get("path"):
+    if query_source_type not in {"file", "log", "plugin"}:
+        report.errors.append("queries.source.type must be 'file', 'log', or 'plugin'")
+    if query_source_type in {"file", "log"} and not query_source.get("path"):
         report.errors.append("Missing required field: queries.source.path")
+    if query_source_type == "plugin" and not query_source.get("provider"):
+        report.errors.append("Missing required field: queries.source.provider")
 
     if query_source_type == "log":
         fmt = str(query_source.get("format", "solr_params"))
@@ -245,6 +260,32 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
                 not isinstance(urls, list) or not all(isinstance(item, str) for item in urls)
             ):
                 report.errors.append("observability.webhooks.urls must be a list of strings")
+
+    plugins = raw.get("plugins")
+    if plugins is not None and not isinstance(plugins, dict):
+        report.errors.append("plugins must be an object")
+        plugins = {}
+    if isinstance(plugins, dict):
+        enabled = plugins.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            report.errors.append("plugins.enabled must be boolean")
+        strict_mode = plugins.get("strict_mode", plugins.get("strict"))
+        if strict_mode is not None and not isinstance(strict_mode, bool):
+            report.errors.append("plugins.strict_mode must be boolean")
+        directories = plugins.get("directories", plugins.get("paths"))
+        if directories is not None and (
+            not isinstance(directories, list) or not all(isinstance(item, str) for item in directories)
+        ):
+            report.errors.append("plugins.directories must be a list of strings")
+        enabled_plugins = plugins.get("enabled_plugins", plugins.get("enable_plugins"))
+        if enabled_plugins is not None and (
+            not isinstance(enabled_plugins, list)
+            or not all(isinstance(item, str) for item in enabled_plugins)
+        ):
+            report.errors.append("plugins.enabled_plugins must be a list of strings")
+        plugin_config = plugins.get("config")
+        if plugin_config is not None and not isinstance(plugin_config, (str, dict)):
+            report.errors.append("plugins.config must be a file path or object")
 
     governance = raw.get("governance")
     if governance is not None and not isinstance(governance, dict):

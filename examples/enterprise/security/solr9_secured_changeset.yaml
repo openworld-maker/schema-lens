@@ -1,0 +1,22 @@
+baseline:
+  solr_url: "https://solr.example.internal/solr"
+  collection: "products"
+shadow:
+  solr_url: "https://solr-shadow.example.internal/solr"
+  collection_prefix: "products_shadow"
+security:
+  profile: enterprise-safe
+  baseline_auth:
+    type: basic
+    username_env: SCHEMA_LENS_SOLR_USER
+    password_env: SCHEMA_LENS_SOLR_PASSWORD
+  shadow_auth:
+    type: bearer
+    token_env: SCHEMA_LENS_SOLR_TOKEN
+  audit:
+    requested_by: "platform-team@example.com"
+    approval_reference: "CHG-2034"
+queries:
+  source:
+    type: file
+    path: "examples/queries/multitenant_queries.jsonl"

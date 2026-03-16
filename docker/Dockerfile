@@ -12,5 +12,5 @@ RUN pip install --no-cache-dir .
 
 EXPOSE 8090
 
-ENTRYPOINT ["schema-lens"]
+ENTRYPOINT ["solrguard"]
 CMD ["--help"]

@@ -28,7 +28,7 @@ def _artifact_dir_for(manager: JobManager, run_id: str) -> Path:
     record = manager.get(run_id)
     if record is None:
         raise HTTPException(status_code=404, detail="run not found")
-    artifacts = record.outputs.get("artifacts_dir")
+    artifacts = record.output_paths.get("artifacts_dir")
     if not isinstance(artifacts, str):
         raise HTTPException(status_code=404, detail="artifacts not found")
     return Path(artifacts)
@@ -40,7 +40,7 @@ def dashboard_runs(manager: JobManager = Depends(_manager)) -> dict[str, object]
     return {
         "runs": [
             {
-                "id": record.id,
+                "id": record.job_id,
                 "status": record.status,
                 "created_at": record.created_at,
                 "ended_at": record.ended_at,

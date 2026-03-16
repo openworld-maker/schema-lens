@@ -42,7 +42,7 @@ def build_ci_summary_markdown(
             gate_detail = "\n".join(lines)
 
     lines = [
-        "# Schema-Lens CI Summary",
+        "# SolrGuard CI Summary",
         "",
         "## Overall Metrics",
         f"- Queries: **{total}**",

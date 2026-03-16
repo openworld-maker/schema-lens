@@ -1,4 +1,4 @@
-"""Observability helpers for schema-lens runtime."""
+"""Observability helpers for SolrGuard runtime."""
 
 from schema_lens.observability.events import build_event, validate_event
 from schema_lens.observability.otel import OTelRecorder

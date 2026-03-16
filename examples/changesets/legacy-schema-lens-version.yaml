@@ -1,0 +1,21 @@
+schema_lens_version: 1
+solr:
+  baseline_url: "http://localhost:8983/solr/products"
+  shadow_url: "http://localhost:8983/solr/products_shadow"
+
+changes:
+  - op: "queryparams.set"
+    target:
+      path: "query/default"
+    values:
+      mm: "2<75%"
+
+queries:
+  source:
+    type: "file"
+    path: "examples/queries/golden.jsonl"
+
+data:
+  docs_source:
+    type: "file"
+    path: "examples/docs.jsonl"

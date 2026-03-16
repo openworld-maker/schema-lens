@@ -1,7 +1,7 @@
 # Changeset Spec v0.2.0
 
 ```yaml
-schema_lens_version: 1
+solrguard_version: 1
 
 baseline:
   solr_url: "http://localhost:8983/solr"
@@ -234,10 +234,10 @@ observability:
   webhooks:
     enabled: false
     urls:
-      - "http://localhost:9000/schema-lens/events"
+      - "http://localhost:9000/solrguard/events"
     timeout_seconds: 3.0
     headers:
-      X-Schema-Lens-Source: "ci"
+      X-SolrGuard-Source: "ci"
 
 governance:
   enabled: true
@@ -275,7 +275,7 @@ privacy:
   allowlist: ["summary", "diffs", "top_regressions"]
   denylist: ["raw_docs", "request_headers"]
   no_persist_sensitive: false
-  hash_salt: "schema-lens-internal"
+  hash_salt: "solrguard-internal"
 ```
 
 ## Required fields
@@ -312,9 +312,9 @@ privacy:
   - `replace`: overwrite target with source content.
   - `patch_append`: append source lines after existing lines.
   - `patch_merge`: deterministic unique line merge of existing + source.
-- When these ops are present, schema-lens builds an isolated patched configset and creates the
+- When these ops are present, solrguard builds an isolated patched configset and creates the
   shadow collection with `collection.configName=<patched_configset>`.
-- By default, schema-lens then promotes uploaded configsets to a trusted clone for environments
+- By default, solrguard then promotes uploaded configsets to a trusted clone for environments
   where untrusted uploaded configsets are restricted (`shadow.promote_uploaded_configset_trusted`).
 
 ## Notes
@@ -360,3 +360,4 @@ privacy:
 - `shadow.allow_shared_configset_fallback=true` allows non-isolated fallback only for plain
   configset clone path (no file patching).
 - Empty `changes` is allowed with a warning.
+- `schema_lens_version` remains accepted as a legacy alias, but `solrguard_version` is preferred.

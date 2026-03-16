@@ -1,4 +1,4 @@
-"""Privacy controls for schema-lens artifacts."""
+"""Privacy controls for SolrGuard artifacts."""
 
 from schema_lens.privacy.maskers import mask_payload
 from schema_lens.privacy.profiles import PrivacyProfile, resolve_privacy_profile

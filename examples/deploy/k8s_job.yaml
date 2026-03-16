@@ -1,15 +1,15 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: schema-lens-run
+  name: solrguard-run
 spec:
   template:
     spec:
       restartPolicy: Never
       containers:
-        - name: schema-lens
-          image: schema-lens:local
-          command: ["schema-lens"]
+        - name: solrguard
+          image: solrguard:local
+          command: ["solrguard"]
           args:
             - "run"
             - "examples/changesets/fieldtype-change.yaml"

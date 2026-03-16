@@ -1,4 +1,4 @@
-"""Security primitives for schema-lens enterprise mode."""
+"""Security primitives for SolrGuard enterprise mode."""
 
 from schema_lens.security.audit import build_audit_record
 from schema_lens.security.auth import AuthMaterial, AuthResolutionError, resolve_auth_material

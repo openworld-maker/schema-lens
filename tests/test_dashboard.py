@@ -32,7 +32,7 @@ def test_dashboard_endpoints_render(tmp_path: Path):
     client = TestClient(create_dashboard_app(tmp_path))
     html = client.get("/")
     assert html.status_code == 200
-    assert "Schema-Lens Dashboard" in html.text
+    assert "SolrGuard Dashboard" in html.text
     overview = client.get("/api/overview")
     assert overview.status_code == 200
     explorer = client.get("/api/query-explorer")

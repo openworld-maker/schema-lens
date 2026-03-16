@@ -1,0 +1,20 @@
+baseline:
+  solr_url: "http://localhost:8983/solr"
+  collection: "products"
+shadow:
+  solr_url: "http://localhost:8983/solr"
+  collection_prefix: "products_shadow"
+queries:
+  source:
+    type: file
+    path: "examples/queries/multitenant_queries.jsonl"
+observability:
+  enabled: true
+  prometheus:
+    enabled: true
+  otel:
+    enabled: true
+  webhooks:
+    enabled: true
+    urls:
+      - "http://localhost:9000/solrguard/events"

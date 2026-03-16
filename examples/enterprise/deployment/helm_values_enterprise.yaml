@@ -1,0 +1,13 @@
+image:
+  repository: solrguard
+  tag: latest
+service:
+  type: ClusterIP
+  port: 8080
+extraEnv:
+  - name: SCHEMA_LENS_API_JOB_STORE
+    value: sqlite
+  - name: SCHEMA_LENS_API_SQLITE_PATH
+    value: /data/jobs.db
+  - name: SCHEMA_LENS_API_WORKER_MODE
+    value: inprocess

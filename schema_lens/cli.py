@@ -1,10 +1,12 @@
-"""Typer CLI for schema-lens."""
+"""Typer CLI for SolrGuard."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import hashlib
 import json
 import logging
+import sys
 import uuid
 from pathlib import Path
 from time import perf_counter
@@ -15,6 +17,7 @@ import typer
 from schema_lens.changesets.parser import parse_changeset
 from schema_lens.changesets.validator import validate_changeset
 from schema_lens.ci.summarize import build_ci_summary_markdown
+from schema_lens.compat import capabilities_for_version, compatibility_contract, detect_solr_version
 from schema_lens.compat.adapters import (
     configset_upload_supported,
     metrics_supported,
@@ -32,16 +35,17 @@ from schema_lens.golden.model import GoldenQuery
 from schema_lens.golden.store import append_golden
 from schema_lens.http.client import SolrHttpClient
 from schema_lens.logging import configure_logging
-from schema_lens.ltr.capture import capture_ltr_impact
 from schema_lens.monitor.runner import run_monitor
 from schema_lens.perf.solr_metrics import collect_solr_runtime_snapshot
 from schema_lens.privacy import (
     mask_payload as privacy_mask_payload,
 )
 from schema_lens.plugins.contracts.auth import AuthProviderPlugin
+from schema_lens.plugins.contracts.gate import GateEvaluatorPlugin, GateResult
+from schema_lens.plugins.contracts.report import ReportRendererPlugin, ReportWidgetPlugin
+from schema_lens.plugins.loader import load_plugin_runtime_config, load_plugins, validate_issues
+from schema_lens.plugins.utils import normalize_plugin_payload
 from schema_lens.queries.loader import load_queries
-from schema_lens.queries.model import QueryCase
-from schema_lens.queries.normalize import normalize_q, query_fingerprint
 from schema_lens.queries.sampler import sample_queries
 from schema_lens.queries.sanitize import sanitize_params
 from schema_lens.queries.sources.solr_request_log import extract_queries_from_log
@@ -64,6 +68,11 @@ from schema_lens.runtime import (
     cleanup_plugins,
     emit_observability_event,
     execute_plugins,
+    get_plugin_config,
+    get_plugins_by_type,
+    plugin_artifact_paths,
+    select_plugin,
+    emit_observability_hook,
     finalize_governance_manifest,
     finalize_observability_outputs,
     initialize_governance,
@@ -103,7 +112,12 @@ from schema_lens.vector.validation import (
     validate_vector_setup,
 )
 
-app = typer.Typer(help="Schema Lens: Solr schema evolution impact simulator")
+app = typer.Typer(
+    help=(
+        "SolrGuard: Search Change Governance for Apache Solr. "
+        "Legacy alias `schema-lens` is retained for backward compatibility."
+    )
+)
 shadow_app = typer.Typer(help="Shadow collection operations")
 queries_app = typer.Typer(help="Query source operations")
 docs_app = typer.Typer(help="Document source operations")
@@ -111,6 +125,7 @@ golden_app = typer.Typer(help="Golden query operations")
 ci_app = typer.Typer(help="CI summary operations")
 api_app = typer.Typer(help="API service mode operations")
 rollout_app = typer.Typer(help="GitOps and rollout orchestration operations")
+plugins_app = typer.Typer(help="Plugin SDK operations")
 app.add_typer(shadow_app, name="shadow")
 app.add_typer(queries_app, name="queries")
 app.add_typer(docs_app, name="docs")
@@ -118,8 +133,10 @@ app.add_typer(golden_app, name="golden")
 app.add_typer(ci_app, name="ci")
 app.add_typer(api_app, name="api")
 app.add_typer(rollout_app, name="rollout")
+app.add_typer(plugins_app, name="plugins")
 LOGGER = logging.getLogger(__name__)
 _PRIVACY_RUNTIME_CFG: dict[str, Any] = {}
+_LEGACY_ALIAS_WARNED = False
 
 
 def _hash_obj(data: Any) -> str:
@@ -180,7 +197,7 @@ def _write_json_maybe_redacted(
     if isinstance(active_privacy_cfg, dict) and active_privacy_cfg.get("enabled"):
         masked = privacy_mask_payload(
             out_payload,
-            salt=str(active_privacy_cfg.get("salt", "schema-lens")),
+            salt=str(active_privacy_cfg.get("salt", "solrguard")),
             email=bool(active_privacy_cfg.get("mask_email", True)),
             uuid=bool(active_privacy_cfg.get("mask_uuid", True)),
             numeric_id_hash=bool(active_privacy_cfg.get("numeric_id_hash", True)),
@@ -302,6 +319,79 @@ def snapshot(
         verbose=verbose,
     )
     typer.echo(str(captured["paths"]["manifest"]))
+
+
+def _resolve_system_info_payload(
+    *,
+    solr_url: str | None,
+    from_file: Path | None,
+    verbose: bool,
+) -> dict[str, Any]:
+    if from_file is not None:
+        payload = read_json(from_file.resolve())
+        if not isinstance(payload, dict):
+            raise typer.BadParameter("--from-file must point to a JSON object payload")
+        return payload
+    if solr_url is None:
+        raise typer.BadParameter("Provide either --solr-url or --from-file")
+    client = SolrHttpClient(solr_url, verbose=verbose)
+    try:
+        return system_info(client)
+    finally:
+        client.close()
+
+
+@app.command("detect-capabilities")
+def detect_capabilities(
+    solr_url: str | None = typer.Option(None, "--solr-url"),
+    from_file: Path | None = typer.Option(None, "--from-file", exists=True, readable=True),
+    out: Path | None = typer.Option(None, "--out"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Detect Solr version and capability flags from target or fixture payload."""
+    configure_logging(verbose)
+    payload = _resolve_system_info_payload(solr_url=solr_url, from_file=from_file, verbose=verbose)
+    version = detect_solr_version(payload)
+    contract = compatibility_contract(version)
+    contract["source"] = "file" if from_file is not None else "live_target"
+    contract["version_detected"] = bool(version)
+    if out is not None:
+        write_json(out, contract)
+        typer.echo(str(out))
+        return
+    typer.echo(json.dumps(contract, indent=2))
+
+
+@app.command("compatibility")
+def compatibility(
+    target: str | None = typer.Option(None, "--target"),
+    from_file: Path | None = typer.Option(None, "--from-file", exists=True, readable=True),
+    out: Path | None = typer.Option(None, "--out"),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Render compatibility and fallback summary for a target Solr or fixture."""
+    configure_logging(verbose)
+    payload = _resolve_system_info_payload(solr_url=target, from_file=from_file, verbose=verbose)
+    version = detect_solr_version(payload)
+    caps = capabilities_for_version(version)
+    contract = compatibility_contract(version)
+    summary = {
+        "target": target or str(from_file),
+        "solr_version": version,
+        "support_tier": contract.get("support_tier"),
+        "confidence": contract.get("confidence"),
+        "missing_capabilities": contract.get("missing_capabilities", []),
+        "fallbacks": contract.get("fallbacks", []),
+        "vector_supported": bool(caps.get("vector_query_supported")),
+        "structured_explain_supported": bool(caps.get("structured_explain_supported")),
+        "metrics_supported": bool(caps.get("metrics_json_supported")),
+        "package_manager_available": bool(caps.get("package_manager_available")),
+    }
+    if out is not None:
+        write_json(out, summary)
+        typer.echo(str(out))
+        return
+    typer.echo(json.dumps(summary, indent=2))
 
 
 @shadow_app.command("create")
@@ -594,18 +684,60 @@ def serve(
 
 @api_app.command("serve")
 def api_serve(
-    out: Path = typer.Option(Path("out/api"), "--out"),
+    data_dir: Path = typer.Option(Path(".solrguard_api"), "--data-dir", "--out"),
     host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8090, "--port"),
+    port: int = typer.Option(8080, "--port"),
     local_only: bool = typer.Option(True, "--local-only/--no-local-only"),
+    reload: bool = typer.Option(False, "--reload"),
+    job_store: str = typer.Option("file", "--job-store", help="Job metadata backend: file|sqlite"),
+    sqlite_path: Path | None = typer.Option(None, "--sqlite-path"),
+    worker_mode: str = typer.Option(
+        "inprocess",
+        "--worker-mode",
+        help="Worker mode: inline|inprocess|external",
+    ),
 ) -> None:
-    """Run schema-lens REST API service."""
+    """Run SolrGuard REST API service."""
     import uvicorn
     from schema_lens.api import create_api_app
 
-    ensure_dir(out)
-    app_instance = create_api_app(base_dir=out.resolve(), local_only=local_only)
-    uvicorn.run(app_instance, host=host, port=port)
+    ensure_dir(data_dir)
+    app_instance = create_api_app(
+        base_dir=data_dir.resolve(),
+        local_only=local_only,
+        job_store_backend=job_store,
+        sqlite_path=sqlite_path,
+        worker_mode=worker_mode,
+    )
+    uvicorn.run(app_instance, host=host, port=port, reload=reload)
+
+
+@api_app.command("inspect")
+def api_inspect(
+    data_dir: Path = typer.Option(Path(".solrguard_api"), "--data-dir", "--out"),
+    local_only: bool = typer.Option(True, "--local-only/--no-local-only"),
+    job_store: str = typer.Option("file", "--job-store", help="Job metadata backend: file|sqlite"),
+    sqlite_path: Path | None = typer.Option(None, "--sqlite-path"),
+    worker_mode: str = typer.Option("inprocess", "--worker-mode"),
+) -> None:
+    """Inspect API service config and storage paths."""
+    from schema_lens import __version__
+    from schema_lens.api.storage import ApiStorage
+
+    storage = ApiStorage(data_dir.resolve(), job_store_backend=job_store, sqlite_path=sqlite_path)
+    payload = {
+        "service": "solrguard-api",
+        "version": __version__,
+        "local_only": local_only,
+        "base_dir": str(storage.base_dir),
+        "jobs_dir": str(storage.jobs_dir),
+        "runs_dir": str(storage.runs_dir),
+        "logs_dir": str(storage.logs_dir),
+        "job_store_backend": storage.job_store_backend,
+        "sqlite_path": str(storage.sqlite_path) if storage.sqlite_path is not None else None,
+        "worker_mode": worker_mode,
+    }
+    typer.echo(json.dumps(payload, indent=2))
 
 
 @rollout_app.command("git-drift")
@@ -899,7 +1031,7 @@ def run(
     vector_dimension_override: int | None = typer.Option(None, "--vector-dimension-override"),
     verbose: bool = typer.Option(False, "--verbose"),
 ) -> None:
-    """Run full end-to-end schema lens workflow."""
+    """Run full end-to-end SolrGuard governance workflow."""
     configure_logging(verbose)
     changeset = _load_and_validate_changeset(changeset_path, check_paths=True)
 
@@ -1003,12 +1135,12 @@ def run(
     if docs_source_type == "file":
         docs_path = _resolve_path(changeset_path, docs_source["path"])
 
-    queries_path = _resolve_path(changeset_path, queries_source["path"])
-    manifest.inputs.update(
-        {
-            "queries_path": str(queries_path),
-        }
-    )
+    queries_path: Path | None = None
+    if query_source_type in {"file", "log"}:
+        queries_path = _resolve_path(changeset_path, queries_source["path"])
+        manifest.inputs["queries_path"] = str(queries_path)
+    else:
+        manifest.inputs["queries_path"] = "<provided_by_plugin>"
     if docs_path:
         manifest.inputs["docs_path"] = str(docs_path)
 
@@ -1055,6 +1187,9 @@ def run(
     governance_sign_secret: str | None = None
     privacy_runtime_cfg: dict[str, Any] = {"enabled": False}
     persist_sensitive_effective = True
+    plugin_gate_results: list[dict[str, Any]] = []
+    plugin_report_sections_json: list[dict[str, Any]] = []
+    plugin_report_sections_html: list[dict[str, Any]] = []
 
     def emit_event(event_type: str, payload: dict[str, Any]) -> None:
         if observability_runtime is None:
@@ -1146,13 +1281,16 @@ def run(
                 logger=LOGGER,
             )
             manifest.settings["plugins"] = plugins_runtime.settings
+            emit_observability_hook(
+                runtime=plugins_runtime,
+                event="on_run_started",
+                run_context={"run_id": run_id, "changeset_path": str(changeset_path.resolve())},
+                out_dir=out,
+                logger=LOGGER,
+            )
 
         with stage("security_init"):
-            auth_plugins = [
-                plugin
-                for plugin in (plugins_runtime.active_plugins if plugins_runtime is not None else [])
-                if isinstance(plugin, AuthProviderPlugin)
-            ]
+            auth_plugins = [plugin for plugin in get_plugins_by_type(plugins_runtime, "auth") if isinstance(plugin, AuthProviderPlugin)]
             security_runtime = initialize_security(
                 changeset_raw=changeset.raw,
                 changeset_path=changeset_path,
@@ -1303,6 +1441,16 @@ def run(
 
         with stage("docs_sample_or_load"):
             try:
+                doc_source_plugin_name = str(docs_source.get("provider", "")).strip()
+                selected_doc_plugin = (
+                    select_plugin(
+                        plugins_runtime,
+                        plugin_type="doc_source",
+                        plugin_name=doc_source_plugin_name,
+                    )
+                    if docs_source_type == "plugin"
+                    else None
+                )
                 docs_payload = load_or_sample_docs(
                     docs_source_type=docs_source_type,
                     docs_source=docs_source if isinstance(docs_source, dict) else {},
@@ -1319,6 +1467,13 @@ def run(
                     vector_runtime_cfg=vector_runtime_cfg,
                     changeset_path=changeset_path,
                     verbose=verbose,
+                    docs_source_plugins=[selected_doc_plugin] if selected_doc_plugin is not None else [],
+                    plugin_source_config=get_plugin_config(plugins_runtime, doc_source_plugin_name),
+                    plugin_context={
+                        "run_id": run_id,
+                        "changeset": changeset.raw,
+                        "changeset_path": str(changeset_path.resolve()),
+                    },
                 )
             except ValueError as exc:
                 raise StageError(str(exc)) from exc
@@ -1340,15 +1495,32 @@ def run(
             write_json(shadow_json_path, existing_shadow_manifest)
 
         with stage("queries_extract_or_load"):
+            query_source_plugin_name = str(queries_source.get("provider", "")).strip()
+            selected_query_plugin = (
+                select_plugin(
+                    plugins_runtime,
+                    plugin_type="query_source",
+                    plugin_name=query_source_plugin_name,
+                )
+                if query_source_type == "plugin"
+                else None
+            )
             query_cases = load_or_extract_queries(
                 query_source_type=query_source_type,
                 queries_source=queries_source if isinstance(queries_source, dict) else {},
-                queries_path=queries_path,
+                queries_path=queries_path if queries_path is not None else changeset_path,
                 query_cfg=query_cfg if isinstance(query_cfg, dict) else {},
                 outputs=manifest.outputs,
                 manifest_inputs=manifest.inputs,
                 manifest_settings=manifest.settings,
                 persist_sensitive_effective=bool(persist_sensitive_effective),
+                query_source_plugins=[selected_query_plugin] if selected_query_plugin is not None else [],
+                plugin_source_config=get_plugin_config(plugins_runtime, query_source_plugin_name),
+                plugin_context={
+                    "run_id": run_id,
+                    "changeset": changeset.raw,
+                    "changeset_path": str(changeset_path.resolve()),
+                },
             )
 
         with stage("vector_validate"):
@@ -1642,6 +1814,99 @@ def run(
                 extra_sensitive_keys=security_extra_sensitive_keys,
             )
 
+        with stage("plugins_gate"):
+            if plugins_runtime is not None:
+                for plugin in get_plugins_by_type(plugins_runtime, "gate"):
+                    if not isinstance(plugin, GateEvaluatorPlugin):
+                        continue
+                    plugin_policy = get_plugin_config(plugins_runtime, plugin.metadata.name)
+                    try:
+                        raw_result = plugin.evaluate(
+                            plugin_policy,
+                            {
+                                "compare_data": compare_data,
+                                "replay_data": replay_data,
+                                "manifest": manifest.to_dict(),
+                            },
+                        )
+                        result_payload = (
+                            asdict(raw_result)
+                            if isinstance(raw_result, GateResult)
+                            else (raw_result if isinstance(raw_result, dict) else {"value": raw_result})
+                        )
+                        result_payload = normalize_plugin_payload(result_payload)
+                        plugin_gate_results.append(
+                            {
+                                "plugin": plugin.metadata.name,
+                                "plugin_type": plugin.metadata.plugin_type,
+                                "result": result_payload,
+                            }
+                        )
+                        artifact_paths = plugin_artifact_paths(out, plugin.metadata.name)
+                        write_json(
+                            artifact_paths.result_json,
+                            {"plugin": plugin.metadata.name, "phase": "gate", "result": result_payload},
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        issue = {
+                            "plugin": plugin.metadata.name,
+                            "plugin_type": plugin.metadata.plugin_type,
+                            "stage": "gate",
+                            "message": str(exc),
+                            "fatal": bool(plugins_runtime.strict),
+                        }
+                        plugins_runtime.issues.append(issue)
+                        if plugins_runtime.strict:
+                            raise StageError(f"gate plugin failed ({plugin.metadata.name}): {exc}") from exc
+                        LOGGER.warning("Gate plugin failed for %s: %s", plugin.metadata.name, exc)
+                if plugin_gate_results:
+                    compare_data["plugin_gates"] = plugin_gate_results
+
+        with stage("plugins_report"):
+            if plugins_runtime is not None:
+                for plugin in get_plugins_by_type(plugins_runtime, "report"):
+                    if not isinstance(plugin, (ReportRendererPlugin, ReportWidgetPlugin)):
+                        continue
+                    try:
+                        json_section = plugin.render_json_section(
+                            {"run_id": run_id, "changeset": changeset.raw},
+                            {"compare_data": compare_data, "replay_data": replay_data, "manifest": manifest.to_dict()},
+                        )
+                        if isinstance(json_section, dict):
+                            plugin_report_sections_json.append(
+                                {"plugin": plugin.metadata.name, "section": json_section}
+                            )
+                        html_section = plugin.render_html_section(
+                            {"run_id": run_id, "changeset": changeset.raw},
+                            {"compare_data": compare_data, "replay_data": replay_data, "manifest": manifest.to_dict()},
+                        )
+                        if isinstance(html_section, str) and html_section.strip():
+                            plugin_report_sections_html.append(
+                                {"plugin": plugin.metadata.name, "html": html_section}
+                            )
+                        artifact_paths = plugin_artifact_paths(out, plugin.metadata.name)
+                        write_json(
+                            artifact_paths.result_json,
+                            {
+                                "plugin": plugin.metadata.name,
+                                "phase": "report",
+                                "json_section": json_section if isinstance(json_section, dict) else {},
+                                "html_section": html_section if isinstance(html_section, str) else "",
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        issue = {
+                            "plugin": plugin.metadata.name,
+                            "plugin_type": plugin.metadata.plugin_type,
+                            "stage": "report",
+                            "message": str(exc),
+                            "fatal": bool(plugins_runtime.strict),
+                        }
+                        plugins_runtime.issues.append(issue)
+                        if plugins_runtime.strict:
+                            raise StageError(f"report plugin failed ({plugin.metadata.name}): {exc}") from exc
+                        LOGGER.warning("Report plugin failed for %s: %s", plugin.metadata.name, exc)
+
         with stage("plugins_execute"):
             if plugins_runtime is None:
                 compare_data["plugins"] = {"enabled": False, "results": [], "issues": []}
@@ -1657,6 +1922,19 @@ def run(
                     replay_data=replay_data,
                     logger=LOGGER,
                 )
+                if plugin_gate_results:
+                    compare_data["plugins"]["gate_results"] = plugin_gate_results
+                if plugin_report_sections_json or plugin_report_sections_html:
+                    compare_data["plugins"]["report_sections"] = {
+                        "json": plugin_report_sections_json,
+                        "html": plugin_report_sections_html,
+                    }
+                manifest.settings["plugins_runtime"] = {
+                    "loaded_plugins": compare_data["plugins"].get("loaded_plugins", []),
+                    "failed_plugins": compare_data["plugins"].get("failed_plugins", []),
+                    "warnings": compare_data["plugins"].get("warnings", []),
+                    "output_artifacts": compare_data["plugins"].get("output_artifacts", {}),
+                }
             _write_json_maybe_redacted(
                 Path(manifest.outputs["plugins_json"]),
                 compare_data["plugins"],
@@ -1669,6 +1947,25 @@ def run(
                 redact=security_redact_artifacts,
                 extra_sensitive_keys=security_extra_sensitive_keys,
             )
+            if plugin_gate_results:
+                failed_gate = next(
+                    (
+                        result
+                        for result in plugin_gate_results
+                        if isinstance(result.get("result"), dict)
+                        and result["result"].get("passed") is False
+                    ),
+                    None,
+                )
+                if failed_gate is not None:
+                    emit_observability_hook(
+                        runtime=plugins_runtime,
+                        event="on_gate_failed",
+                        run_context={"run_id": run_id, "changeset_path": str(changeset_path.resolve())},
+                        payload=failed_gate,
+                        out_dir=out,
+                        logger=LOGGER,
+                    )
 
         with stage("report"):
             write_report_artifacts(
@@ -1681,6 +1978,10 @@ def run(
                 write_redacted_json=_write_json_maybe_redacted,
                 redact=security_redact_artifacts,
                 extra_sensitive_keys=security_extra_sensitive_keys,
+                plugin_report_sections={
+                    "json": plugin_report_sections_json,
+                    "html": plugin_report_sections_html,
+                },
             )
 
     except Exception as exc:  # noqa: BLE001
@@ -1756,6 +2057,14 @@ def run(
                 "queries_run": manifest.stats.get("queries_run", 0),
             },
         )
+        emit_observability_hook(
+            runtime=plugins_runtime,
+            event="on_run_completed",
+            run_context={"run_id": run_id, "changeset_path": str(changeset_path.resolve())},
+            payload={"compare_data": compare_data, "replay_data": replay_data, "manifest": manifest.to_dict()},
+            out_dir=out,
+            logger=LOGGER,
+        )
 
         observability_cfg = observability_runtime.config if observability_runtime is not None else {}
         compare_data["observability"] = finalize_observability_outputs(
@@ -1811,9 +2120,88 @@ def run(
     typer.echo(str(Path(manifest.outputs["report_html"])))
 
 
+@plugins_app.command("list")
+def plugins_list(
+    changeset: Path | None = typer.Option(None, "--changeset", exists=True, readable=True),
+) -> None:
+    """List discovered plugins with metadata."""
+    raw: dict[str, Any] = {}
+    changeset_path = Path.cwd() / "changeset.yaml"
+    if changeset is not None:
+        parsed = parse_changeset(changeset)
+        raw = parsed.raw
+        changeset_path = changeset
+    cfg = load_plugin_runtime_config(raw, changeset_path)
+    loaded = load_plugins(cfg, base_dir=changeset_path.parent.resolve())
+    payload = {
+        "enabled": cfg.enabled,
+        "strict_mode": cfg.strict_mode,
+        "issues": [issue.to_dict() for issue in loaded.issues],
+        "plugins": loaded.registry.list_plugins(),
+        "active": [plugin.metadata.name for plugin in loaded.active],
+    }
+    typer.echo(json.dumps(payload, indent=2))
+
+
+@plugins_app.command("validate")
+def plugins_validate(
+    changeset: Path = typer.Option(..., "--changeset", exists=True, readable=True),
+) -> None:
+    """Validate plugin discovery and strict-mode compatibility."""
+    parsed = parse_changeset(changeset)
+    cfg = load_plugin_runtime_config(parsed.raw, changeset)
+    loaded = load_plugins(cfg, base_dir=changeset.parent.resolve())
+    validate_issues(loaded.issues, strict=cfg.strict_mode)
+    typer.echo(
+        json.dumps(
+            {
+                "ok": True,
+                "issues": [issue.to_dict() for issue in loaded.issues],
+                "active": [plugin.metadata.name for plugin in loaded.active],
+            },
+            indent=2,
+        )
+    )
+
+
+@plugins_app.command("inspect")
+def plugins_inspect(
+    plugin_name: str = typer.Argument(...),
+    changeset: Path = typer.Option(..., "--changeset", exists=True, readable=True),
+) -> None:
+    """Inspect a single plugin's metadata and config."""
+    parsed = parse_changeset(changeset)
+    cfg = load_plugin_runtime_config(parsed.raw, changeset)
+    loaded = load_plugins(cfg, base_dir=changeset.parent.resolve())
+    plugin = loaded.registry.get_by_name(plugin_name)
+    if plugin is None:
+        raise typer.BadParameter(f"Plugin not found: {plugin_name}")
+    plugin_config = cfg.config.get(plugin_name, {})
+    payload = {
+        "name": plugin.metadata.name,
+        "version": plugin.metadata.version,
+        "description": plugin.metadata.description,
+        "plugin_type": plugin.metadata.plugin_type,
+        "compatible_schema_lens_version": plugin.metadata.compatible_schema_lens_version,
+        "capabilities": plugin.metadata.capabilities,
+        "enabled": plugin in loaded.active,
+        "config": plugin.redact(plugin_config if isinstance(plugin_config, dict) else {}),
+    }
+    typer.echo(json.dumps(payload, indent=2))
+
+
 @app.callback()
 def main() -> None:
-    """Schema Lens command group."""
+    """SolrGuard command group."""
+    global _LEGACY_ALIAS_WARNED
+    invoked = Path(sys.argv[0]).name.lower() if sys.argv else ""
+    if invoked == "schema-lens" and not _LEGACY_ALIAS_WARNED:
+        typer.echo(
+            "DEPRECATION: `schema-lens` alias is legacy. Use `solrguard`. "
+            "Alias compatibility is planned until at least v0.5 and removal in a future major release.",
+            err=True,
+        )
+        _LEGACY_ALIAS_WARNED = True
     return None
 
 

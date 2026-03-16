@@ -4,22 +4,22 @@
     {
       "title": "Runs Total",
       "type": "stat",
-      "targets": [{"expr": "schema_lens_runs_total"}]
+      "targets": [{"expr": "solrguard_runs_total"}]
     },
     {
       "title": "Failed Runs",
       "type": "stat",
-      "targets": [{"expr": "schema_lens_runs_failed_total"}]
+      "targets": [{"expr": "solrguard_runs_failed_total"}]
     },
     {
       "title": "High Risk Queries",
       "type": "stat",
-      "targets": [{"expr": "schema_lens_high_risk_queries_total"}]
+      "targets": [{"expr": "solrguard_high_risk_queries_total"}]
     },
     {
       "title": "P95 Latency Regression %",
       "type": "timeseries",
-      "targets": [{"expr": "schema_lens_p95_latency_regression_pct"}]
+      "targets": [{"expr": "solrguard_p95_latency_regression_pct"}]
     }
   ]
 }

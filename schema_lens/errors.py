@@ -1,4 +1,4 @@
-"""Custom exceptions for schema-lens."""
+"""Custom exceptions for SolrGuard."""
 
 
 class SchemaLensError(Exception):

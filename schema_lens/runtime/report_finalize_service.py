@@ -20,11 +20,13 @@ def write_report_artifacts(
     write_redacted_json: Callable[..., None],
     redact: bool,
     extra_sensitive_keys: list[str],
+    plugin_report_sections: dict[str, Any] | None = None,
 ) -> None:
     report_data = build_report_json(
         manifest=manifest_payload,
         compare_data=compare_data,
         replay_data=replay_data,
+        plugin_report_sections=plugin_report_sections or {},
     )
     write_redacted_json(
         report_json_path,

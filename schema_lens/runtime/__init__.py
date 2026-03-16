@@ -11,7 +11,17 @@ from schema_lens.runtime.post_compare_service import (
     run_rewrite_diff_flow,
     run_vector_flow,
 )
-from schema_lens.runtime.plugin_service import PluginRuntime, cleanup_plugins, execute_plugins, initialize_plugins
+from schema_lens.runtime.plugin_service import (
+    PluginRuntime,
+    cleanup_plugins,
+    emit_observability_hook,
+    execute_plugins,
+    get_plugin_config,
+    get_plugins_by_type,
+    initialize_plugins,
+    plugin_artifact_paths,
+    select_plugin,
+)
 from schema_lens.runtime.privacy_service import PrivacyRuntime, build_and_enforce_privacy_report, initialize_privacy
 from schema_lens.runtime.replay_compare_service import run_compare_stage, run_replay_stage
 from schema_lens.runtime.report_finalize_service import finalize_observability_outputs, write_report_artifacts
@@ -33,6 +43,11 @@ __all__ = [
     "initialize_observability",
     "emit_observability_event",
     "initialize_plugins",
+    "get_plugins_by_type",
+    "get_plugin_config",
+    "select_plugin",
+    "plugin_artifact_paths",
+    "emit_observability_hook",
     "execute_plugins",
     "cleanup_plugins",
     "run_snapshot_and_compat",

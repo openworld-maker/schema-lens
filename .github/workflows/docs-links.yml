@@ -1,0 +1,36 @@
+name: Docs Link Check
+
+on:
+  pull_request:
+    paths:
+      - 'README.md'
+      - 'docs/**'
+      - 'examples/**'
+      - '.github/workflows/docs-links.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'README.md'
+      - 'docs/**'
+      - 'examples/**'
+      - '.github/workflows/docs-links.yml'
+  workflow_dispatch:
+
+jobs:
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check markdown links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          fail: true
+          args: >-
+            --verbose
+            --no-progress
+            --accept 200,206,429
+            --exclude-mail
+            --exclude '^file://'
+            --exclude 'http://localhost'
+            --exclude 'http://127.0.0.1'
+            README.md docs/**/*.md examples/**/*.md

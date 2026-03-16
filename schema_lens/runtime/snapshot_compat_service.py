@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from schema_lens.compat import capabilities_for_version, detect_solr_version
+from schema_lens.compat import capabilities_for_version, compatibility_contract, detect_solr_version
 from schema_lens.compat.adapters import (
     configset_upload_supported,
     metrics_supported,
@@ -85,11 +85,8 @@ def run_snapshot_and_compat(
 
     compat_version = detect_solr_version(system)
     compat_caps = capabilities_for_version(compat_version)
-    compat_payload = {
-        "solr_version": compat_version,
-        "capabilities": compat_caps,
-        "degraded_features": [],
-    }
+    compat_payload = compatibility_contract(compat_version)
+    compat_payload["degraded_features"] = []
     if not vector_supported(compat_caps):
         compat_payload["degraded_features"].append("vector_hybrid")
     if not structured_explain_supported(compat_caps):

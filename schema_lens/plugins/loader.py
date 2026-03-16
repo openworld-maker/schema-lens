@@ -24,12 +24,33 @@ from schema_lens.plugins.registry import PluginRegistry, RegistrySelection
 @dataclass
 class PluginRuntimeConfig:
     enabled: bool = False
-    strict: bool = False
+    directories: list[str] = field(default_factory=list)
+    load_builtin: bool = True
+    enabled_plugins: list[str] = field(default_factory=list)
+    strict_mode: bool = False
+    config: dict[str, dict[str, Any]] = field(default_factory=dict)
     enable_entry_points: bool = True
     entry_point_group: str = "schema_lens.plugins"
-    plugin_paths: list[str] = field(default_factory=list)
-    enable_plugins: list[str] = field(default_factory=list)
-    disable_plugins: list[str] = field(default_factory=list)
+
+    @property
+    def plugin_paths(self) -> list[str]:
+        """Backward-compatible alias."""
+        return self.directories
+
+    @property
+    def strict(self) -> bool:
+        """Backward-compatible alias."""
+        return self.strict_mode
+
+    @property
+    def enable_plugins(self) -> list[str]:
+        """Backward-compatible alias."""
+        return self.enabled_plugins
+
+    @property
+    def disable_plugins(self) -> list[str]:
+        """Backward-compatible alias for removed setting."""
+        return []
 
 
 @dataclass
@@ -123,6 +144,17 @@ def _load_module_from_path(path: Path) -> ModuleType:
     return module
 
 
+def _load_builtin_plugins(registry: PluginRegistry) -> list[PluginIssue]:
+    issues: list[PluginIssue] = []
+    try:
+        from schema_lens.plugins.builtin import register_builtin_plugins
+
+        register_builtin_plugins(registry)
+    except Exception as exc:  # noqa: BLE001
+        issues.append(PluginIssue(plugin="builtin", stage="load", message=str(exc)))
+    return issues
+
+
 def _load_from_entry_points(group: str, registry: PluginRegistry) -> list[PluginIssue]:
     issues: list[PluginIssue] = []
     eps = importlib.metadata.entry_points()
@@ -142,6 +174,16 @@ def _load_from_entry_points(group: str, registry: PluginRegistry) -> list[Plugin
     return issues
 
 
+def _iter_plugin_files(root: Path) -> list[Path]:
+    if root.is_file():
+        return [root]
+    return sorted(
+        path
+        for path in root.rglob("*.py")
+        if "__pycache__" not in path.parts and not path.name.startswith("_")
+    )
+
+
 def _load_from_plugin_paths(plugin_paths: list[str], base_dir: Path, registry: PluginRegistry) -> list[PluginIssue]:
     issues: list[PluginIssue] = []
     for value in plugin_paths:
@@ -158,8 +200,7 @@ def _load_from_plugin_paths(plugin_paths: list[str], base_dir: Path, registry: P
             )
             continue
 
-        files = [root] if root.is_file() else sorted(p for p in root.glob("*.py") if not p.name.startswith("_"))
-        for file_path in files:
+        for file_path in _iter_plugin_files(root):
             try:
                 module = _load_module_from_path(file_path)
                 _register_from_module(module, registry)
@@ -177,19 +218,27 @@ def _load_from_plugin_paths(plugin_paths: list[str], base_dir: Path, registry: P
 def _enforce_compatibility(registry: PluginRegistry) -> list[PluginIssue]:
     issues: list[PluginIssue] = []
     for plugin in registry:
-        requirement = plugin.metadata.schema_lens_version
+        requirement = plugin.metadata.compatible_schema_lens_version
         if _version_satisfies(__version__, requirement):
             continue
         issues.append(
             PluginIssue(
                 plugin=plugin.metadata.name,
+                plugin_type=plugin.metadata.plugin_type,
                 stage="compatibility",
                 message=(
-                    f"plugin requires schema-lens '{requirement}' but runtime is '{__version__}'"
+                    f"plugin requires SolrGuard '{requirement}' but runtime is '{__version__}'"
                 ),
             )
         )
     return issues
+
+
+def _read_plugins_config_file(config_path: Path) -> dict[str, Any]:
+    loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise PluginConfigurationError("plugin config YAML must be a mapping")
+    return loaded
 
 
 def load_plugin_runtime_config(changeset_raw: dict[str, Any], changeset_path: Path) -> PluginRuntimeConfig:
@@ -197,28 +246,66 @@ def load_plugin_runtime_config(changeset_raw: dict[str, Any], changeset_path: Pa
     if not isinstance(plugins_cfg, dict):
         raise PluginConfigurationError("changeset.plugins must be a mapping")
 
+    merged_cfg: dict[str, Any] = dict(plugins_cfg)
+    config_base_dir: Path | None = None
     config_path_raw = plugins_cfg.get("config")
-    if config_path_raw:
-        config_path = Path(str(config_path_raw))
+    if isinstance(config_path_raw, str) and config_path_raw:
+        config_path = Path(config_path_raw)
         if not config_path.is_absolute():
             config_path = (changeset_path.parent / config_path).resolve()
-        loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        if not isinstance(loaded, dict):
-            raise PluginConfigurationError("plugin config YAML must be a mapping")
-        plugins_cfg = {**loaded, **plugins_cfg}
+        config_base_dir = config_path.parent
+        loaded = _read_plugins_config_file(config_path)
+        merged_cfg = {**loaded, **plugins_cfg}
+        if isinstance(loaded.get("config"), dict) and not isinstance(plugins_cfg.get("config"), dict):
+            merged_cfg["config"] = loaded["config"]
+
+    directories = merged_cfg.get("directories")
+    if directories is None:
+        directories = merged_cfg.get("paths", [])
+    if not isinstance(directories, list):
+        directories = []
+    if config_base_dir is not None and "directories" not in plugins_cfg and "paths" not in plugins_cfg:
+        adjusted: list[str] = []
+        for item in directories:
+            if not isinstance(item, str):
+                continue
+            raw_path = Path(item)
+            if raw_path.is_absolute():
+                adjusted.append(str(raw_path))
+            else:
+                adjusted.append(str((config_base_dir / raw_path).resolve()))
+        directories = adjusted
+
+    enabled_plugins = merged_cfg.get("enabled_plugins")
+    if enabled_plugins is None:
+        enabled_plugins = merged_cfg.get("enable_plugins", [])
+    if not isinstance(enabled_plugins, list):
+        enabled_plugins = []
+
+    strict_mode = merged_cfg.get("strict_mode")
+    if strict_mode is None:
+        strict_mode = merged_cfg.get("strict", False)
+
+    per_plugin_config = merged_cfg.get("config")
+    if isinstance(per_plugin_config, str):
+        per_plugin_config = {}
+    if not isinstance(per_plugin_config, dict):
+        per_plugin_config = {}
+
+    normalized_plugin_config: dict[str, dict[str, Any]] = {}
+    for key, value in per_plugin_config.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            normalized_plugin_config[key] = value
 
     return PluginRuntimeConfig(
-        enabled=bool(plugins_cfg.get("enabled", False)),
-        strict=bool(plugins_cfg.get("strict", False)),
-        enable_entry_points=bool(plugins_cfg.get("entry_points", True)),
-        entry_point_group=str(plugins_cfg.get("entry_point_group", "schema_lens.plugins")),
-        plugin_paths=[str(item) for item in plugins_cfg.get("paths", []) if isinstance(item, str)],
-        enable_plugins=[
-            str(item) for item in plugins_cfg.get("enable_plugins", []) if isinstance(item, str)
-        ],
-        disable_plugins=[
-            str(item) for item in plugins_cfg.get("disable_plugins", []) if isinstance(item, str)
-        ],
+        enabled=bool(merged_cfg.get("enabled", False)),
+        directories=[str(item) for item in directories if isinstance(item, str)],
+        load_builtin=bool(merged_cfg.get("load_builtin", True)),
+        enabled_plugins=[str(item) for item in enabled_plugins if isinstance(item, str)],
+        strict_mode=bool(strict_mode),
+        config=normalized_plugin_config,
+        enable_entry_points=bool(merged_cfg.get("entry_points", True)),
+        entry_point_group=str(merged_cfg.get("entry_point_group", "schema_lens.plugins")),
     )
 
 
@@ -229,10 +316,13 @@ def load_plugins(config: PluginRuntimeConfig, *, base_dir: Path) -> LoadedPlugin
     if not config.enabled:
         return LoadedPlugins(config=config, registry=registry, active=[], issues=issues)
 
+    if config.load_builtin:
+        issues.extend(_load_builtin_plugins(registry))
+
+    issues.extend(_load_from_plugin_paths(config.directories, base_dir, registry))
     if config.enable_entry_points:
         issues.extend(_load_from_entry_points(config.entry_point_group, registry))
 
-    issues.extend(_load_from_plugin_paths(config.plugin_paths, base_dir, registry))
     issues.extend(_enforce_compatibility(registry))
 
     incompatible = {issue.plugin for issue in issues if issue.stage == "compatibility"}
@@ -243,15 +333,15 @@ def load_plugins(config: PluginRuntimeConfig, *, base_dir: Path) -> LoadedPlugin
         filtered_registry.register(plugin)
 
     selection: RegistrySelection = filtered_registry.resolve(
-        enable=config.enable_plugins or None,
-        disable=config.disable_plugins,
+        enable=config.enabled_plugins or None,
+        disable=[],
     )
     for name in selection.missing_required:
         issues.append(
             PluginIssue(
                 plugin=name,
                 stage="selection",
-                message="plugin requested in enable_plugins but not discovered",
+                message="plugin requested in enabled_plugins but not discovered",
                 fatal=True,
             )
         )
@@ -260,6 +350,7 @@ def load_plugins(config: PluginRuntimeConfig, *, base_dir: Path) -> LoadedPlugin
 
 
 def validate_issues(issues: list[PluginIssue], *, strict: bool) -> None:
-    if strict and any(item.fatal or item.stage in {"compatibility", "selection", "load"} for item in issues):
+    blocking_stages = {"compatibility", "selection", "load"}
+    if strict and any(item.fatal or item.stage in blocking_stages for item in issues):
         first = issues[0]
         raise PluginCompatibilityError(f"plugin runtime blocked: {first.message}")

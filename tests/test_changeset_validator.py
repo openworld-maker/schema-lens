@@ -9,7 +9,7 @@ def test_validator_accepts_minimal_valid_changeset(tmp_path):
     queries.write_text('q=foo\n', encoding="utf-8")
 
     data = {
-        "schema_lens_version": 1,
+        "solrguard_version": 1,
         "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
         "data": {"docs_source": {"path": str(docs)}},
         "queries": {"source": {"path": str(queries)}},
@@ -66,7 +66,31 @@ def test_validator_rejects_unsupported_version():
     }
     report = validate_changeset(Changeset(raw=data), check_paths=False)
     assert not report.ok
-    assert any("Unsupported schema_lens_version" in err for err in report.errors)
+    assert any("Unsupported changeset version" in err for err in report.errors)
+
+
+def test_validator_accepts_solrguard_version_key_and_warns_for_legacy():
+    modern = {
+        "solrguard_version": 1,
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+    }
+    modern_report = validate_changeset(Changeset(raw=modern), check_paths=False)
+    assert modern_report.ok
+    assert not any("schema_lens_version is deprecated" in msg for msg in modern_report.warnings)
+
+    legacy = {
+        "schema_lens_version": 1,
+        "baseline": {"solr_url": "http://localhost:8983/solr", "collection": "products"},
+        "data": {"docs_source": {"path": "docs.jsonl"}},
+        "queries": {"source": {"path": "queries.txt"}},
+        "changes": [],
+    }
+    legacy_report = validate_changeset(Changeset(raw=legacy), check_paths=False)
+    assert legacy_report.ok
+    assert any("schema_lens_version is deprecated" in msg for msg in legacy_report.warnings)
 
 
 def test_validator_accepts_solr_doc_source_without_path(tmp_path):

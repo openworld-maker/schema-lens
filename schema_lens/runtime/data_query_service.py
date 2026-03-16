@@ -17,6 +17,24 @@ from schema_lens.util.io import write_jsonl
 from schema_lens.vector.validation import augment_docs_with_embeddings, load_embeddings
 
 
+def _coerce_plugin_query_params(row: dict[str, Any]) -> dict[str, Any]:
+    params = row.get("params")
+    if isinstance(params, dict):
+        return params
+
+    query_text = row.get("query_text")
+    if isinstance(query_text, str):
+        params = {"q": query_text}
+    else:
+        params = {}
+    filters = row.get("filters")
+    if isinstance(filters, list):
+        params["fq"] = [str(item) for item in filters]
+    elif isinstance(filters, str):
+        params["fq"] = filters
+    return params
+
+
 def load_or_sample_docs(
     *,
     docs_source_type: str,
@@ -34,9 +52,26 @@ def load_or_sample_docs(
     vector_runtime_cfg,
     changeset_path: Path,
     verbose: bool,
+    docs_source_plugins: list[Any] | None = None,
+    plugin_source_config: dict[str, Any] | None = None,
+    plugin_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     docs_payload: list[dict[str, Any]]
-    if docs_source_type == "file":
+    if docs_source_type == "plugin":
+        provider = str(docs_source.get("provider", "")).strip()
+        if not provider:
+            raise ValueError("data.docs_source.provider is required when type=plugin")
+        active_plugins = docs_source_plugins or []
+        plugin = next((item for item in active_plugins if item.metadata.name == provider), None)
+        if plugin is None:
+            raise ValueError(f"doc source plugin not found: {provider}")
+        source_config = plugin_source_config if isinstance(plugin_source_config, dict) else {}
+        plugin.validate_source(source_config)
+        loaded_docs = plugin.load_docs(source_config, plugin_context or {})
+        if not isinstance(loaded_docs, list):
+            raise ValueError(f"doc source plugin {provider} returned non-list payload")
+        docs_payload = [item for item in loaded_docs if isinstance(item, dict)]
+    elif docs_source_type == "file":
         if docs_path is None:
             raise ValueError("docs path unavailable for file source")
         docs_payload = load_docs(
@@ -139,7 +174,49 @@ def load_or_extract_queries(
     manifest_inputs: dict[str, Any],
     manifest_settings: dict[str, Any],
     persist_sensitive_effective: bool,
+    query_source_plugins: list[Any] | None = None,
+    plugin_source_config: dict[str, Any] | None = None,
+    plugin_context: dict[str, Any] | None = None,
 ) -> list[QueryCase]:
+    if query_source_type == "plugin":
+        provider = str(queries_source.get("provider", "")).strip()
+        if not provider:
+            raise ValueError("queries.source.provider is required when type=plugin")
+        active_plugins = query_source_plugins or []
+        plugin = next((item for item in active_plugins if item.metadata.name == provider), None)
+        if plugin is None:
+            raise ValueError(f"query source plugin not found: {provider}")
+        source_config = plugin_source_config if isinstance(plugin_source_config, dict) else {}
+        plugin.validate_source(source_config)
+        loaded_rows = plugin.load_queries(source_config, plugin_context or {})
+        if not isinstance(loaded_rows, list):
+            raise ValueError(f"query source plugin {provider} returned non-list payload")
+
+        query_cases: list[QueryCase] = []
+        for idx, row in enumerate(loaded_rows, start=1):
+            if isinstance(row, QueryCase):
+                query_cases.append(row)
+                continue
+            if not isinstance(row, dict):
+                continue
+            params = _coerce_plugin_query_params(row)
+            case = QueryCase(
+                id=idx,
+                line_no=idx,
+                raw_line=json.dumps(row, sort_keys=True),
+                normalized_q=normalize_q(params),
+                fingerprint=query_fingerprint(params),
+                params=params,
+                request_mode="params",
+                skip_reasons=[],
+                segment={
+                    key: str(value)
+                    for key, value in row.items()
+                    if key in {"tenant", "query_class", "region", "locale"} and value is not None
+                },
+            )
+            query_cases.append(case)
+        return query_cases
     if query_source_type == "file":
         return load_queries(
             queries_path,

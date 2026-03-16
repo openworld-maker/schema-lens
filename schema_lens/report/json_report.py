@@ -10,6 +10,7 @@ def build_report_json(
     manifest: dict[str, Any],
     compare_data: dict[str, Any],
     replay_data: dict[str, Any],
+    plugin_report_sections: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     summary = {
         "queries_total": compare_data.get("summary", {}).get("queries_total", 0),
@@ -110,6 +111,7 @@ def build_report_json(
             "plugins",
             {"enabled": False, "results": [], "issues": []},
         ),
+        "plugin_report_sections": plugin_report_sections or {},
         "vector_hybrid_simulation": compare_data.get("vector_hybrid", {}),
         "hybrid_sensitivity": compare_data.get("hybrid_sensitivity", {}),
         "top_regressions": top_regressions,

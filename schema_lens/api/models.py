@@ -1,58 +1,28 @@
-"""Pydantic request/response models for API mode."""
+"""Internal API job models and compatibility exports."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
-
-class RunCreateRequest(BaseModel):
-    changeset_path: str | None = None
-    changeset_inline_yaml: str | None = None
-    changeset_inline_json: dict[str, Any] | None = None
-    changeset_provider: str | None = None
-    changeset_file_content: str | None = None
-    changeset_file_name: str | None = None
-    output_dir: str | None = None
-    k: int | None = None
-    cleanup: bool | None = None
-    batch_size: int = 100
-    scenario: list[str] | None = None
-    enable_sensitivity: bool | None = None
-    weights: str | None = None
-    vector_dimension_override: int | None = None
-    verbose: bool = False
-    metadata: dict[str, Any] = Field(default_factory=dict)
+from schema_lens.api.schemas import CompareEnvRequest, GateRequest, RunCreateRequest
+from schema_lens.api.schemas.common import JobStatus, JobType
 
 
-class RunCreateResponse(BaseModel):
-    id: str
-    status: Literal["queued", "running", "succeeded", "failed"]
-
-
-class RunStatusResponse(BaseModel):
-    id: str
-    status: Literal["queued", "running", "succeeded", "failed"]
+class ApiJob(BaseModel):
+    job_id: str
+    job_type: JobType
+    status: JobStatus
     created_at: str
     started_at: str | None = None
     ended_at: str | None = None
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    output_paths: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
-    request: dict[str, Any] = Field(default_factory=dict)
-    outputs: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-class CompareEnvRequest(BaseModel):
-    env1_path: str
-    env2_path: str
-    queries_path: str
-    query_format: str = "jsonl"
-    k: int = 10
-    max_queries: int | None = None
-    verbose: bool = False
-    out_dir: str | None = None
+__all__ = ["ApiJob", "RunCreateRequest", "CompareEnvRequest", "GateRequest"]
 
-
-class GateRequest(BaseModel):
-    compare_path: str
-    policy_path: str

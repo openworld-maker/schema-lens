@@ -1,4 +1,4 @@
-# Schema-Lens Project Context
+# SolrGuard Project Context
 
 This file is a handoff note for continuing work from the Codex CLI without re-discovering repo state.
 
@@ -232,9 +232,9 @@ make dev-up
 cd /Users/gaurav/Documents/PersonalProjects/schema-lens
 make dev-up
 make demo-setup
-.venv/bin/schema-lens run examples/changesets/prod_realism_example.yaml --out out/prod_like_run
+.venv/bin/solrguard run examples/changesets/prod_realism_example.yaml --out out/prod_like_run
 .venv/bin/python scripts/setup_vector_demo.py
-.venv/bin/schema-lens run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
+.venv/bin/solrguard run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
 ```
 
 ### Useful outputs

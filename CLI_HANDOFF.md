@@ -80,7 +80,7 @@ These files are especially important:
 cd /Users/gaurav/Documents/PersonalProjects/schema-lens
 make dev-up
 .venv/bin/python scripts/setup_vector_demo.py
-.venv/bin/schema-lens run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
+.venv/bin/solrguard run examples/changesets/vector-hybrid-demo.yaml --out out/vector_demo --enable-sensitivity
 ```
 
 Expected artifacts:

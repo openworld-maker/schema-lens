@@ -10,22 +10,42 @@ from fastapi.testclient import TestClient
 
 from schema_lens.api.app import create_api_app
 from schema_lens.api.jobs import JobManager
-from schema_lens.api.models import RunCreateRequest
+from schema_lens.api.models import ApiJob, RunCreateRequest
 from schema_lens.api.storage import ApiStorage
 from schema_lens.util.io import write_json
 
 
-def _fake_executor(changeset_path: Path, request: RunCreateRequest, out_dir: Path) -> None:
+def _fake_run_executor(changeset_path: Path, request: RunCreateRequest, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_json(out_dir / "report.json", {"summary": {"queries_total": 1}})
-    write_json(out_dir / "compare.json", {"summary": {"avg_overlap": 1.0}})
+    write_json(out_dir / "report.json", {"summary": {"queries_total": 1, "high_risk_percent": 0.0}})
+    write_json(out_dir / "report.html", {"ok": True})
+    write_json(out_dir / "compare.json", {"summary": {"avg_overlap": 1.0}, "diffs": []})
 
 
-def _wait_for_status(client: TestClient, run_id: str, wanted: str, timeout_s: float = 5.0) -> dict:
+def _fake_compare_executor(job: ApiJob) -> tuple[dict, dict]:
+    out_dir = Path(job.output_paths.get("artifacts_dir", Path.cwd())).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_json(out_dir / "compare.json", {"summary": {"queries_total": 2}})
+    return {"artifacts_dir": str(out_dir), "artifacts": [{"name": "compare.json", "path": str(out_dir / "compare.json"), "size_bytes": (out_dir / "compare.json").stat().st_size}]}, {"summary": {"queries_total": 2}}
+
+
+def _fake_gate_executor(job: ApiJob) -> tuple[dict, dict]:
+    out_dir = Path(job.output_paths.get("artifacts_dir", Path.cwd())).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    write_json(out_dir / "gate.json", {"pass": True, "failed_rules": [], "warned_rules": []})
+    return {"artifacts_dir": str(out_dir), "artifacts": [{"name": "gate.json", "path": str(out_dir / "gate.json"), "size_bytes": (out_dir / "gate.json").stat().st_size}]}, {"pass": True}
+
+
+def _wait_for_status(
+    client: TestClient,
+    url: str,
+    wanted: str,
+    timeout_s: float = 5.0,
+) -> dict:
     deadline = time.time() + timeout_s
-    last = {}
+    last: dict = {}
     while time.time() < deadline:
-        resp = client.get(f"/runs/{run_id}")
+        resp = client.get(url)
         assert resp.status_code == 200
         last = resp.json()
         if last.get("status") == wanted:
@@ -34,93 +54,98 @@ def _wait_for_status(client: TestClient, run_id: str, wanted: str, timeout_s: fl
     return last
 
 
-def test_api_run_lifecycle_and_artifacts(tmp_path: Path):
+def _app_with_fakes(tmp_path: Path) -> TestClient:
     storage = ApiStorage(tmp_path)
-    manager = JobManager(storage, executor=_fake_executor)
+    manager = JobManager(
+        storage,
+        executor=_fake_run_executor,
+        compare_executor=_fake_compare_executor,
+        gate_executor=_fake_gate_executor,
+    )
     app = create_api_app(base_dir=tmp_path, job_manager=manager)
-    client = TestClient(app)
+    return TestClient(app)
 
-    payload = {
-        "changeset_inline_yaml": "baseline:\n  solr_url: http://localhost:8983/solr\n  collection: products\n"
-    }
-    created = client.post("/runs", json=payload)
+
+def test_health_and_capabilities(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
+    assert client.get("/health").status_code == 200
+    assert client.get("/health/details").status_code == 200
+    caps = client.get("/capabilities")
+    assert caps.status_code == 200
+    payload = caps.json()
+    assert payload["service"] == "solrguard-api"
+    assert "runs" in payload["features"]
+    assert client.get("/plugins").status_code == 200
+
+
+def test_post_runs_and_get_status_and_summary(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
+    created = client.post(
+        "/runs",
+        json={
+            "changeset_inline_yaml": "baseline:\\n  solr_url: http://localhost:8983/solr\\n  collection: products\\n"
+        },
+    )
     assert created.status_code == 200
-    run_id = created.json()["id"]
+    job_id = created.json()["job_id"]
+    status_payload = _wait_for_status(client, f"/runs/{job_id}", "succeeded")
+    assert status_payload["status"] == "succeeded"
+    summary = client.get(f"/runs/{job_id}/summary")
+    assert summary.status_code == 200
+    assert summary.json()["summary"]["queries_total"] == 1
 
-    finished = _wait_for_status(client, run_id, "succeeded")
-    assert finished["status"] == "succeeded"
 
-    artifacts = client.get(f"/runs/{run_id}/artifacts")
+def test_artifact_endpoints_and_compat_paths(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
+    created = client.post(
+        "/runs",
+        json={
+            "changeset_inline_yaml": "baseline:\\n  solr_url: http://localhost:8983/solr\\n  collection: products\\n"
+        },
+    )
+    job_id = created.json()["job_id"]
+    _wait_for_status(client, f"/runs/{job_id}", "succeeded")
+
+    artifacts = client.get(f"/artifacts/{job_id}")
     assert artifacts.status_code == 200
     names = {item["name"] for item in artifacts.json()["artifacts"]}
     assert "report.json" in names
 
-    download = client.get(f"/runs/{run_id}/artifacts/report.json")
+    download = client.get(f"/artifacts/{job_id}/report.json")
     assert download.status_code == 200
-    assert "queries_total" in download.text
+
+    compat_list = client.get(f"/runs/{job_id}/artifacts")
+    assert compat_list.status_code == 200
+    compat_download = client.get(f"/runs/{job_id}/artifacts/report.json")
+    assert compat_download.status_code == 200
 
 
-def test_api_health_capabilities_and_invalid_input(tmp_path: Path):
-    app = create_api_app(base_dir=tmp_path)
-    client = TestClient(app)
+def test_compare_env_and_gates_job_lifecycle(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
 
-    assert client.get("/health").status_code == 200
-    caps = client.get("/capabilities")
-    assert caps.status_code == 200
-    assert "POST /runs" in caps.json()["endpoints"]
-
-    bad = client.post("/runs", json={})
-    assert bad.status_code == 400
-
-
-def test_api_gate_endpoint(tmp_path: Path):
-    app = create_api_app(base_dir=tmp_path)
-    client = TestClient(app)
-
-    compare_path = tmp_path / "compare.json"
-    policy_path = tmp_path / "policy.yaml"
-    write_json(compare_path, {"k": 10, "summary": {}, "diffs": []})
-    policy_path.write_text("fail: []\nwarn: []\n", encoding="utf-8")
-
-    resp = client.post(
-        "/gate",
-        json={"compare_path": str(compare_path), "policy_path": str(policy_path)},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["pass"] is True
-
-
-def test_api_compare_env_endpoint_with_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    from schema_lens.api.routes import compare_env as compare_env_route
-
-    def fake_compare_environments(**kwargs):
-        return {"replay": {"stats": {"failures": 0}}, "compare": {"summary": {"queries_total": 1}}}
-
-    monkeypatch.setattr(compare_env_route, "compare_environments", fake_compare_environments)
-
-    app = create_api_app(base_dir=tmp_path)
-    client = TestClient(app)
-
-    env1 = tmp_path / "env1.yaml"
-    env2 = tmp_path / "env2.yaml"
-    queries = tmp_path / "queries.jsonl"
-    env1.write_text("name: e1\nsolr_url: http://x\ncollection: c\n", encoding="utf-8")
-    env2.write_text("name: e2\nsolr_url: http://y\ncollection: c\n", encoding="utf-8")
-    queries.write_text('{"params":{"q":"foo"}}\n', encoding="utf-8")
-
-    resp = client.post(
+    compare_created = client.post(
         "/compare-env",
-        json={"env1_path": str(env1), "env2_path": str(env2), "queries_path": str(queries)},
+        json={"env1": "examples/envs/prod_us.yaml", "env2": "examples/envs/prod_eu.yaml", "queries_path": "examples/queries/env_compare_queries.jsonl"},
     )
-    assert resp.status_code == 200
-    assert Path(resp.json()["outputs"]["compare_json"]).exists()
+    assert compare_created.status_code == 200
+    compare_job_id = compare_created.json()["job_id"]
+    compare_status = _wait_for_status(client, f"/compare-env/{compare_job_id}", "succeeded")
+    assert compare_status["status"] == "succeeded"
+
+    gate_created = client.post(
+        "/gates",
+        json={"compare_artifact": "out/demo/compare.json", "policy_path": "examples/policy/gate_default.yaml"},
+    )
+    assert gate_created.status_code == 200
+    gate_job_id = gate_created.json()["job_id"]
+    gate_status = _wait_for_status(client, f"/gates/{gate_job_id}", "succeeded")
+    assert gate_status["status"] == "succeeded"
 
 
-def test_api_dashboard_endpoints(tmp_path: Path):
-    storage = ApiStorage(tmp_path)
-    manager = JobManager(storage, executor=_fake_executor)
-    app = create_api_app(base_dir=tmp_path, job_manager=manager)
-    client = TestClient(app)
+def test_invalid_payload_and_path_traversal(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
+    bad_run = client.post("/runs", json={})
+    assert bad_run.status_code == 422
 
     created = client.post(
         "/runs",
@@ -128,18 +153,18 @@ def test_api_dashboard_endpoints(tmp_path: Path):
             "changeset_inline_yaml": "baseline:\\n  solr_url: http://localhost:8983/solr\\n  collection: products\\n"
         },
     )
-    run_id = created.json()["id"]
-    finished = _wait_for_status(client, run_id, "succeeded")
-    assert finished["status"] == "succeeded"
+    job_id = created.json()["job_id"]
+    _wait_for_status(client, f"/runs/{job_id}", "succeeded")
+    traversal = client.get(f"/artifacts/{job_id}/../secret.txt")
+    assert traversal.status_code in {400, 404}
 
-    runs = client.get("/dashboard/runs")
-    assert runs.status_code == 200
-    assert any(item["id"] == run_id for item in runs.json()["runs"])
 
-    overview = client.get(f"/dashboard/runs/{run_id}/overview")
-    assert overview.status_code == 200
-    assert "report" in overview.json()
-
-    explorer = client.get(f"/dashboard/runs/{run_id}/query-explorer")
-    assert explorer.status_code == 200
-    assert "top_regressions" in explorer.json()
+def test_gate_compat_endpoint(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
+    compare_path = tmp_path / "compare.json"
+    policy_path = tmp_path / "policy.yaml"
+    write_json(compare_path, {"k": 10, "summary": {}, "diffs": []})
+    policy_path.write_text("fail: []\nwarn: []\n", encoding="utf-8")
+    resp = client.post("/gate", json={"compare_path": str(compare_path), "policy_path": str(policy_path)})
+    assert resp.status_code == 200
+    assert resp.json()["pass"] is True

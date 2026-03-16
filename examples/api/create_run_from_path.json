@@ -1,0 +1,7 @@
+{
+  "changeset_path": "examples/changesets/perf_estimator_example.yaml",
+  "out_dir": "out/api_run_001",
+  "options": {
+    "strict": false
+  }
+}

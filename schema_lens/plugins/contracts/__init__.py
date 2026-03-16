@@ -7,10 +7,10 @@ from schema_lens.plugins.contracts.analyzer import (
 )
 from schema_lens.plugins.contracts.auth import AuthProviderPlugin
 from schema_lens.plugins.contracts.doc_source import DocSourcePlugin
-from schema_lens.plugins.contracts.gate import GateEvaluatorPlugin
+from schema_lens.plugins.contracts.gate import GateEvaluatorPlugin, GatePlugin, GateResult
 from schema_lens.plugins.contracts.observability import ObservabilityExporterPlugin
 from schema_lens.plugins.contracts.query_source import QuerySourcePlugin
-from schema_lens.plugins.contracts.report import ReportRendererPlugin, ReportWidgetPlugin
+from schema_lens.plugins.contracts.report import ReportPlugin, ReportRendererPlugin, ReportWidgetPlugin
 from schema_lens.plugins.contracts.replay import ReplayExecutorPlugin
 from schema_lens.plugins.contracts.rollout import RolloutProviderPlugin
 
@@ -22,7 +22,10 @@ __all__ = [
     "DiffAnalyzerPlugin",
     "RootCauseRulePlugin",
     "RecommendationRulePlugin",
+    "GatePlugin",
+    "GateResult",
     "GateEvaluatorPlugin",
+    "ReportPlugin",
     "ReportRendererPlugin",
     "ReportWidgetPlugin",
     "ObservabilityExporterPlugin",

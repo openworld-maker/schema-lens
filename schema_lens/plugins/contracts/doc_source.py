@@ -10,5 +10,8 @@ from schema_lens.plugins.base import BasePlugin
 class DocSourcePlugin(BasePlugin):
     """Provide documents for shadow indexing."""
 
-    def load_docs(self, context: dict[str, Any]) -> list[dict[str, Any]]:
+    def validate_source(self, config: dict[str, Any]) -> None:
+        return None
+
+    def load_docs(self, config: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
         return []

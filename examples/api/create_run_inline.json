@@ -1,0 +1,31 @@
+{
+  "changeset": {
+    "solrguard_version": 1,
+    "baseline": {
+      "solr_url": "http://localhost:8983/solr",
+      "collection": "products"
+    },
+    "shadow": {
+      "mode": "solrcloud",
+      "solr_url": "http://localhost:8983/solr",
+      "collection_name_template": "{collection}__shadow__{ts}",
+      "cleanup": true
+    },
+    "data": {
+      "docs_source": {
+        "type": "file",
+        "path": "examples/docs.jsonl",
+        "format": "jsonl"
+      }
+    },
+    "queries": {
+      "source": {
+        "type": "file",
+        "path": "examples/queries.txt",
+        "format": "simple"
+      }
+    },
+    "changes": []
+  },
+  "out_dir": "out/api_run_002"
+}

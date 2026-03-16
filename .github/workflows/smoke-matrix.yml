@@ -37,7 +37,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: schema-lens-smoke-matrix-reports
+          name: solrguard-smoke-matrix-reports
           path: out/matrix
           if-no-files-found: warn
 

@@ -34,7 +34,7 @@ def initialize_privacy(
         "hashed_doc_id_only": profile.hashed_doc_id_only,
         "allowlist": privacy_cfg.get("allowlist", []) if isinstance(privacy_cfg.get("allowlist"), list) else [],
         "denylist": privacy_cfg.get("denylist", []) if isinstance(privacy_cfg.get("denylist"), list) else [],
-        "salt": str(privacy_cfg.get("hash_salt", "schema-lens")),
+        "salt": str(privacy_cfg.get("hash_salt", "solrguard")),
         "persist_sensitive": not bool(privacy_cfg.get("no_persist_sensitive", False)),
     }
     persist_sensitive_effective = bool(security_persist_sensitive) and bool(runtime_cfg.get("persist_sensitive", True))

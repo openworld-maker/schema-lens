@@ -1,0 +1,6 @@
+{
+  "lucene": {
+    "solr-impl-version": "Acme Solr Distribution build-2026.03"
+  },
+  "mode": "solrcloud"
+}

@@ -29,12 +29,12 @@ jobs:
         run: shasum -a 256 dist/* > dist/SHA256SUMS.txt
 
       - name: Build Docker image (smoke)
-        run: docker build -f docker/Dockerfile -t schema-lens:release .
+        run: docker build -f docker/Dockerfile -t solrguard:release .
 
       - name: Helm template smoke
         run: |
           if command -v helm >/dev/null 2>&1; then
-            helm template schema-lens ./helm/schema-lens > /tmp/schema-lens-helm.yaml
+            helm template solrguard ./helm/solrguard > /tmp/solrguard-helm.yaml
           else
             echo "helm not installed on runner image; skipping"
           fi
@@ -42,6 +42,6 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: schema-lens-release
+          name: solrguard-release
           path: |
             dist/*
