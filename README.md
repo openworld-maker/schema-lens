@@ -2,9 +2,16 @@
 
 Search Change Governance for Apache Solr.
 
-SolrGuard helps teams safely evaluate Solr schema/config/relevance changes with compatibility
-detection, policy gates, approvals and exceptions, rollout planning, privacy-safe artifacts, and
-operational integrations for CI/CD and platform workflows.
+[![CI](https://github.com/openworld-maker/schema-lens/actions/workflows/ci.yml/badge.svg)](https://github.com/openworld-maker/schema-lens/actions/workflows/ci.yml)
+[![Docs Link Check](https://github.com/openworld-maker/schema-lens/actions/workflows/docs-links.yml/badge.svg)](https://github.com/openworld-maker/schema-lens/actions/workflows/docs-links.yml)
+![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
+![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+
+Solr changes are risky. Schema tweaks, ranking updates, config changes, and version upgrades can
+silently break search relevance, search performance, and Solr compatibility. Most teams still rely
+on ad-hoc scripts and manual checks. SolrGuard provides structured search testing and search
+evaluation for Apache Solr with compatibility detection, policy checks, rollout planning, search
+observability hooks, and privacy-safe reporting for search infrastructure teams.
 
 Current version: `v0.2.0`
 
@@ -23,7 +30,10 @@ SolrGuard is the new primary name. `schema-lens` remains available as a legacy C
 
 - One-command local evaluator:
   - `./scripts/first_time_evaluator.sh`
+- Offline demo without Solr (under 3 minutes):
+  - [examples/demo/README.md](examples/demo/README.md)
 - [Quickstart](#quickstart-basic)
+- [3-minute quickstart](#quickstart-3-minutes-offline)
 - [Enterprise quickstart](#quickstart-enterprise-governance-mode)
 - [Compatibility matrix](docs/enterprise/compatibility-matrix.md)
 - [Governance guide](docs/enterprise/policies.md)
@@ -31,6 +41,7 @@ SolrGuard is the new primary name. `schema-lens` remains available as a legacy C
 - [Example outputs](docs/example-outputs.md)
 - [Roadmap](docs/roadmap.md)
 - [Examples index](examples/README.md)
+- [Categorized examples](docs/examples.md)
 - [Docs index](docs/README.md)
 
 ## Formerly Schema-Lens
@@ -39,10 +50,191 @@ SolrGuard is the new primary name. `schema-lens` remains available as a legacy C
 - `schema-lens` remains available as a legacy CLI alias for backward compatibility.
 - Internal Python import path remains `schema_lens` in this release to minimize migration risk.
 
+## Why SolrGuard exists
+
+Solr change management is hard in real systems:
+
+- relevance can regress without obvious failures
+- Solr 8/9/10 capability differences affect safe rollout paths
+- rollback and post-cutover verification are often under-specified
+- enterprise query logs can contain sensitive data
+- release governance requires auditability, approvals, and exception controls
+
+SolrGuard solves this with deterministic evaluation artifacts, policy-as-code gates, compatibility
+and fallback reporting, rollout planning outputs, and privacy-aware export modes.
+
+## See SolrGuard in action
+
+1. Detect Solr compatibility
+
+```bash
+solrguard detect-capabilities --solr-url http://localhost:8983/solr
+```
+
+2. Compare two ranking states (offline demo fixture)
+
+```bash
+solrguard compare --replay examples/demo/replay_minimal.json --out out/demo_offline/compare.json
+```
+
+3. Evaluate policies
+
+```bash
+solrguard gate --compare out/demo_offline/compare.json --policy examples/policy/gate_default.yaml
+```
+
+4. Generate safe report artifacts
+
+```bash
+solrguard report \
+  --compare out/demo_offline/compare.json \
+  --manifest examples/demo/run_manifest_minimal.json \
+  --replay examples/demo/replay_minimal.json \
+  --out out/demo_offline
+```
+
+Example output:
+
+```text
+Compatibility Report
+Solr Version: 9.4
+Capabilities: schema_api, collections_api, vector_search
+Fallbacks: none
+
+Policy Evaluation
+PASS overlap threshold
+PASS query failures = 0
+WARN latency trend changed
+
+Result: PASSED WITH WARNINGS
+```
+
+## What SolrGuard does
+
+Change Evaluation:
+- schema/config analysis
+- impact simulation and diff metrics
+- segment-aware metrics by tenant/region/locale
+
+Compatibility Safety:
+- Solr version detection
+- capability flags
+- fallback reporting
+
+Governance:
+- policy bundles
+- approval metadata
+- exception tracking with expiry
+
+Rollout Operations:
+- Git vs live comparison
+- canary planning
+- alias swap dry-run
+- rollback planning and post-cutover verification
+
+Platform Integrations:
+- Prometheus
+- OpenTelemetry
+- CI/CD pipelines
+- Docker
+- Helm
+
+## Quickstart (3 minutes, offline)
+
+Use the bundled offline demo dataset in `examples/demo` with no live Solr dependency:
+
+```bash
+mkdir -p out/demo_offline
+solrguard compare --replay examples/demo/replay_minimal.json --out out/demo_offline/compare.json
+solrguard report --compare out/demo_offline/compare.json --manifest examples/demo/run_manifest_minimal.json --replay examples/demo/replay_minimal.json --out out/demo_offline
+solrguard gate --compare out/demo_offline/compare.json --policy examples/policy/gate_default.yaml || true
+```
+
+## Use cases
+
+- Solr schema changes: evaluate schema updates before deployment.
+- Ranking model updates: validate ranking impact safely across representative queries.
+- Solr upgrades: detect version/capability changes and required fallbacks.
+- Enterprise rollout governance: attach policies, approvals, and exceptions to release decisions.
+- Search platform teams: integrate quality gates into CI/CD release workflows.
+
+## Architecture diagram
+
+```mermaid
+flowchart TD
+    A["Developer Change"] --> B["SolrGuard"]
+    B --> C["Compatibility Detection"]
+    B --> D["Change Analysis"]
+    B --> E["Policy Evaluation"]
+    B --> F["Rollout Planning"]
+    B --> G["Safe Reporting"]
+    C --> H["Governance Decision"]
+    D --> H
+    E --> H
+    F --> H
+    G --> H
+```
+
+## Project structure
+
+```text
+schema_lens/      core engine and runtime modules
+solrguard/        import shim and public branding layer
+examples/         runnable scenarios and fixtures
+docs/             operator/developer documentation
+deploy/           deployment examples
+docker/           container assets
+helm/             Helm charts
+tests/            unit and integration coverage
+scripts/          helper scripts and onboarding flows
+```
+
+## Why not just scripts?
+
+Ad-hoc scripts:
+- inconsistent across teams
+- hard to reuse and audit
+- weak policy/governance integration
+- little observability context
+
+SolrGuard:
+- deterministic and reusable evaluation flow
+- policy enforcement with pass/fail semantics
+- auditable artifacts and governance metadata
+- platform integrations for CI/CD and operations
+
+## Ways to contribute
+
+- Add Solr compatibility fixtures (versions/distributions).
+- Create new policy bundles and gate scenarios.
+- Build observability dashboards and webhook examples.
+- Add CI/CD pipeline templates.
+- Improve docs, diagrams, and onboarding flows.
+- Add plugin integrations for enterprise extensions.
+
+Good-first-issues are tracked in roadmap/backlog docs:
+- [docs/roadmap.md](docs/roadmap.md)
+- [docs/enterprise/backlog_next_issues.md](docs/enterprise/backlog_next_issues.md)
+
+## Community
+
+- Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security policy: [SECURITY.md](SECURITY.md)
+- Migration guide: [docs/migration-from-schema-lens.md](docs/migration-from-schema-lens.md)
+
 ## Table of contents
 
+- [Why SolrGuard exists](#why-solrguard-exists)
+- [See SolrGuard in action](#see-solrguard-in-action)
+- [What SolrGuard does](#what-solrguard-does)
+- [Quickstart (3 minutes, offline)](#quickstart-3-minutes-offline)
+- [Use cases](#use-cases)
+- [Architecture diagram](#architecture-diagram)
+- [Project structure](#project-structure)
+- [Why not just scripts?](#why-not-just-scripts)
+- [Ways to contribute](#ways-to-contribute)
+- [Community](#community)
 - [What is SolrGuard?](#what-is-solrguard)
-- [Why it exists](#why-it-exists)
 - [Why SolrGuard](#why-solrguard)
 - [Who is it for?](#who-is-it-for)
 - [Enterprise evaluation workflow](#enterprise-evaluation-workflow)
@@ -77,6 +269,8 @@ SolrGuard is the new primary name. `schema-lens` remains available as a legacy C
 - [Documentation map](#documentation-map)
 - [Examples map](#examples-map)
 - [Testing](#testing)
+- [Roadmap snapshot](#roadmap-snapshot)
+- [Contributing](#contributing)
 - [Troubleshooting](#troubleshooting)
 - [Safety notes](#safety-notes)
 

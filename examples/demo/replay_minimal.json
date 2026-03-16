@@ -1,0 +1,55 @@
+{
+  "k": 10,
+  "stats": {
+    "total_queries": 2,
+    "failures": 0
+  },
+  "pairs": [
+    {
+      "query": {
+        "id": "q1",
+        "raw_line": "wireless mouse",
+        "segment": {"tenant": "acme", "region": "us"}
+      },
+      "baseline": {
+        "docs": [
+          {"id": "p1", "score": 3.2},
+          {"id": "p2", "score": 2.7},
+          {"id": "p3", "score": 2.1}
+        ],
+        "raw_response_meta": {"numFound": 3}
+      },
+      "shadow": {
+        "docs": [
+          {"id": "p1", "score": 3.3},
+          {"id": "p4", "score": 2.8},
+          {"id": "p2", "score": 2.5}
+        ],
+        "raw_response_meta": {"numFound": 3}
+      }
+    },
+    {
+      "query": {
+        "id": "q2",
+        "raw_line": "noise cancelling headphones",
+        "segment": {"tenant": "acme", "region": "eu"}
+      },
+      "baseline": {
+        "docs": [
+          {"id": "h1", "score": 4.1},
+          {"id": "h2", "score": 3.9},
+          {"id": "h3", "score": 3.4}
+        ],
+        "raw_response_meta": {"numFound": 3}
+      },
+      "shadow": {
+        "docs": [
+          {"id": "h2", "score": 4.2},
+          {"id": "h1", "score": 4.0},
+          {"id": "h3", "score": 3.2}
+        ],
+        "raw_response_meta": {"numFound": 3}
+      }
+    }
+  ]
+}

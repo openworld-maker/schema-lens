@@ -1,0 +1,24 @@
+{
+  "run_id": "demo_offline",
+  "timestamp": "2026-03-16T00:00:00Z",
+  "inputs": {
+    "changeset": "examples/demo/candidate_config.yaml",
+    "queries": "examples/demo/queries.jsonl"
+  },
+  "settings": {
+    "compatibility": {
+      "solr_version": "9.4.0",
+      "capabilities": ["schema_api", "collections_api", "vector_search"],
+      "fallbacks": []
+    },
+    "governance": {
+      "enabled": true,
+      "policy_bundle": "examples/policy/gate_default.yaml"
+    }
+  },
+  "outputs": {
+    "compare_json": "out/demo_offline/compare.json",
+    "report_json": "out/demo_offline/report.json",
+    "report_html": "out/demo_offline/report.html"
+  }
+}

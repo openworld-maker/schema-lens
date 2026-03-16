@@ -8,6 +8,15 @@ Fastest runnable path:
 ./scripts/first_time_evaluator.sh
 ```
 
+Offline quickstart (no Solr required):
+
+```bash
+solrguard compare --replay examples/demo/replay_minimal.json --out out/demo_offline/compare.json
+solrguard report --compare out/demo_offline/compare.json --manifest examples/demo/run_manifest_minimal.json --replay examples/demo/replay_minimal.json --out out/demo_offline
+```
+
+Categorized index: [docs/examples.md](../docs/examples.md)
+
 ## Quick evaluation
 
 - `changesets/fieldtype-change.yaml`

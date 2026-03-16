@@ -1,0 +1,8 @@
+collection: products
+query_defaults:
+  defType: edismax
+  qf: "title^4 text"
+  pf: "title^8"
+notes:
+  - boosted title qf
+  - slightly reduced phrase boost

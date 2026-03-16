@@ -1,0 +1,5 @@
+collection: products
+query_defaults:
+  defType: edismax
+  qf: "title^3 text"
+  pf: "title^10"

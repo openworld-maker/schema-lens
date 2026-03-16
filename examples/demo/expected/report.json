@@ -1,0 +1,260 @@
+{
+  "run_manifest": {
+    "run_id": "demo_offline",
+    "timestamp": "2026-03-16T00:00:00Z",
+    "inputs": {
+      "changeset": "examples/demo/candidate_config.yaml",
+      "queries": "examples/demo/queries.jsonl"
+    },
+    "settings": {
+      "compatibility": {
+        "solr_version": "9.4.0",
+        "capabilities": [
+          "schema_api",
+          "collections_api",
+          "vector_search"
+        ],
+        "fallbacks": []
+      },
+      "governance": {
+        "enabled": true,
+        "policy_bundle": "examples/policy/gate_default.yaml"
+      }
+    },
+    "outputs": {
+      "compare_json": "out/demo_offline/compare.json",
+      "report_json": "out/demo_offline/report.json",
+      "report_html": "out/demo_offline/report.html"
+    }
+  },
+  "summary": {
+    "queries_total": 2,
+    "failures": 0,
+    "avg_overlap": 2.5,
+    "high_risk_percent": 100.0,
+    "avg_numfound_delta": 0.0,
+    "avg_sort_instability_ratio": 0.5833333333333333,
+    "queries_with_facet_changes_percent": 0.0
+  },
+  "schema_safety_findings": {},
+  "query_rewrite_impact": {},
+  "performance_cost_impact": {
+    "enabled": false,
+    "reason": "Performance capture not enabled."
+  },
+  "root_causes": {
+    "enabled": false,
+    "reason": "Root-cause analysis not generated."
+  },
+  "recommendations": {
+    "enabled": false,
+    "reason": "Recommendations not generated."
+  },
+  "environment_compare": {
+    "enabled": false,
+    "reason": "Environment compare not generated."
+  },
+  "ltr_impact": {
+    "enabled": false,
+    "reason": "LTR impact not available."
+  },
+  "compatibility": {
+    "solr_version": "9.4.0",
+    "capabilities": [
+      "schema_api",
+      "collections_api",
+      "vector_search"
+    ],
+    "fallbacks": []
+  },
+  "observability": {
+    "enabled": false,
+    "reason": "Observability hooks not enabled."
+  },
+  "governance": {
+    "enabled": true,
+    "policy_bundle": "examples/policy/gate_default.yaml"
+  },
+  "segments": {
+    "enabled": false,
+    "reason": "Segment analysis not generated."
+  },
+  "privacy": {
+    "enabled": false
+  },
+  "plugins": {
+    "enabled": false,
+    "results": [],
+    "issues": []
+  },
+  "plugin_report_sections": {},
+  "vector_hybrid_simulation": {},
+  "hybrid_sensitivity": {},
+  "top_regressions": [
+    {
+      "query_id": "q1",
+      "raw_q": "wireless mouse",
+      "risk": "HIGH",
+      "overlap": 2,
+      "jaccard": 0.5,
+      "kendall_tau": 1.0,
+      "numfound_delta": 0,
+      "sort_instability_ratio": 0.5,
+      "biggest_facet_delta": null,
+      "dropped_top_doc": "p3"
+    },
+    {
+      "query_id": "q2",
+      "raw_q": "noise cancelling headphones",
+      "risk": "HIGH",
+      "overlap": 3,
+      "jaccard": 1.0,
+      "kendall_tau": 0.3333333333333333,
+      "numfound_delta": 0,
+      "sort_instability_ratio": 0.6666666666666666,
+      "biggest_facet_delta": null,
+      "dropped_top_doc": null
+    }
+  ],
+  "per_query_diffs": [
+    {
+      "query_id": "q1",
+      "raw_line": "wireless mouse",
+      "params": {},
+      "segment": {
+        "tenant": "acme",
+        "region": "us"
+      },
+      "baseline_topk_ids": [
+        "p1",
+        "p2",
+        "p3"
+      ],
+      "shadow_topk_ids": [
+        "p1",
+        "p4",
+        "p2"
+      ],
+      "topk_overlap_count": 2,
+      "overlap_ratio": 0.2,
+      "numfound_baseline": 3,
+      "numfound_shadow": 3,
+      "numfound_delta": 0,
+      "sort_instability_ratio": 0.5,
+      "facet_diffs": {},
+      "jaccard": 0.5,
+      "kendall_tau": 1.0,
+      "moved_docs": [
+        {
+          "id": "p2",
+          "rank_baseline": 2,
+          "rank_shadow": 3,
+          "delta": 1
+        }
+      ],
+      "dropped_docs": [
+        "p3"
+      ],
+      "new_docs": [
+        "p4"
+      ],
+      "score_deltas": [
+        {
+          "id": "p1",
+          "score_base": 3.2,
+          "score_shadow": 3.3,
+          "delta": 0.09999999999999964
+        },
+        {
+          "id": "p2",
+          "score_base": 2.7,
+          "score_shadow": 2.5,
+          "delta": -0.20000000000000018
+        }
+      ],
+      "risk_flags": [
+        "HIGH",
+        "LOW_OVERLAP"
+      ],
+      "risk_severity": "HIGH",
+      "errors": {
+        "baseline": null,
+        "shadow": null
+      }
+    },
+    {
+      "query_id": "q2",
+      "raw_line": "noise cancelling headphones",
+      "params": {},
+      "segment": {
+        "tenant": "acme",
+        "region": "eu"
+      },
+      "baseline_topk_ids": [
+        "h1",
+        "h2",
+        "h3"
+      ],
+      "shadow_topk_ids": [
+        "h2",
+        "h1",
+        "h3"
+      ],
+      "topk_overlap_count": 3,
+      "overlap_ratio": 0.3,
+      "numfound_baseline": 3,
+      "numfound_shadow": 3,
+      "numfound_delta": 0,
+      "sort_instability_ratio": 0.6666666666666666,
+      "facet_diffs": {},
+      "jaccard": 1.0,
+      "kendall_tau": 0.3333333333333333,
+      "moved_docs": [
+        {
+          "id": "h1",
+          "rank_baseline": 1,
+          "rank_shadow": 2,
+          "delta": 1
+        },
+        {
+          "id": "h2",
+          "rank_baseline": 2,
+          "rank_shadow": 1,
+          "delta": -1
+        }
+      ],
+      "dropped_docs": [],
+      "new_docs": [],
+      "score_deltas": [
+        {
+          "id": "h1",
+          "score_base": 4.1,
+          "score_shadow": 4.0,
+          "delta": -0.09999999999999964
+        },
+        {
+          "id": "h2",
+          "score_base": 3.9,
+          "score_shadow": 4.2,
+          "delta": 0.30000000000000027
+        },
+        {
+          "id": "h3",
+          "score_base": 3.4,
+          "score_shadow": 3.2,
+          "delta": -0.19999999999999973
+        }
+      ],
+      "risk_flags": [
+        "HIGH",
+        "LOW_OVERLAP"
+      ],
+      "risk_severity": "HIGH",
+      "errors": {
+        "baseline": null,
+        "shadow": null
+      }
+    }
+  ],
+  "explain_bundles": []
+}

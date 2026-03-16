@@ -11,6 +11,7 @@ Technical documentation for SolrGuard, the search change governance toolkit for 
 - I want rollout orchestration (GitOps/canary/rollback): [enterprise/gitops.md](enterprise/gitops.md)
 - I want deployment options (Docker/Helm/API): [deployment.md](deployment.md)
 - I want to see sample report outputs quickly: [example-outputs.md](example-outputs.md)
+- I want categorized runnable examples: [examples.md](examples.md)
 - I am migrating from Schema-Lens: [migration-from-schema-lens.md](migration-from-schema-lens.md)
 
 ## Documentation map
@@ -41,6 +42,7 @@ Technical documentation for SolrGuard, the search change governance toolkit for 
 - [api_server.md](api_server.md)
 - [plugin_sdk.md](plugin_sdk.md)
 - [example-outputs.md](example-outputs.md)
+- [examples.md](examples.md)
 - [enterprise/observability.md](enterprise/observability.md)
 - [deployment.md](deployment.md)
 - [enterprise/deployment.md](enterprise/deployment.md)

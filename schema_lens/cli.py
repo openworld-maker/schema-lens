@@ -23,6 +23,7 @@ from schema_lens.compat.adapters import (
     metrics_supported,
     vector_supported,
 )
+from schema_lens.compare.diff import compare_replay
 from schema_lens.compare.gate import evaluate_gate, load_gate_policy
 from schema_lens.config import RunManifest
 from schema_lens.dashboard.app import create_dashboard_app
