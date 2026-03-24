@@ -80,6 +80,25 @@ flowchart LR
     I --> J["Audit + Export-safe Artifacts"]
 ```
 
+## Security Flow
+
+```text
+changeset security/audit config
+        |
+        v
+secret resolution (env/file/object refs)
+        |
+        v
+auth material build (none/basic/bearer/mtls/plugin)
+        |
+        v
+Solr HTTP clients (baseline/shadow)
+        |
+        +--> redaction engine (manifests/reports/API payload logs)
+        +--> audit trail writer (audit.json + API audit logs)
+        +--> privacy/retention enforcement (profile-driven artifact suppression)
+```
+
 ## GitOps Rollout Flow
 
 ```mermaid
@@ -136,8 +155,9 @@ build schema dependency graphs, and capture deterministic baseline snapshots.
 
 `replay` executes lexical baseline/shadow requests. `vector` adds scenario-based replay and
 client-side hybrid simulation. `compare` computes ranking, facet, filter, sort, rewrite, explain,
-gate, and report-ready summaries. `compat` detects Solr version and exposes capability adapters so
-optional features degrade cleanly across Solr 8/9/10.
+gate, and report-ready summaries. `compat` now includes typed version/capability models, a
+version matrix, runtime endpoint probes, and adapters so optional features degrade cleanly across
+Solr 8/9/10.
 
 ### Analysis tracks
 

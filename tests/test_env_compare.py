@@ -56,7 +56,12 @@ def test_build_environment_compare_summary():
         10,
         EnvironmentConfig("env1", "u1", "c1").to_dict(),
         EnvironmentConfig("env2", "u2", "c2").to_dict(),
+        env1_contract={"capabilities": {"vector_supported": False, "structured_explain_supported": False}},
+        env2_contract={"capabilities": {"vector_supported": True, "structured_explain_supported": True}},
     )
     summary = compare["environment_compare"]["summary"]
     assert summary["top1_mismatch_percent"] == 100.0
     assert "top10_overlap_lt_0_7_percent" in summary
+    compat = compare["environment_compare"]["compatibility"]
+    assert compat["mismatch_risk"] == "high"
+    assert any(item["capability"] == "vector_supported" for item in compat["capability_mismatches"])

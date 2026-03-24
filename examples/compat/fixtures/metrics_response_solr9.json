@@ -1,0 +1,15 @@
+{
+  "metrics": {
+    "solr.node": {
+      "CONTAINER.cores.loaded": 4
+    },
+    "solr.core.products": {
+      "CACHE.searcher.filterCache": {
+        "hits": 100,
+        "inserts": 120,
+        "evictions": 3,
+        "hitratio": 0.83
+      }
+    }
+  }
+}

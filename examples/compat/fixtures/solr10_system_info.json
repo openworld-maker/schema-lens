@@ -1,0 +1,9 @@
+{
+  "mode": "solrcloud",
+  "node": "solr10-node-1",
+  "lucene": {
+    "solr-spec-version": "10.0.0",
+    "solr-impl-version": "10.0.0 6b6b"
+  },
+  "zkHost": "zk1:2181"
+}

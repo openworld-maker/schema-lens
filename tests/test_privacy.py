@@ -34,6 +34,18 @@ def test_retention_deletes_sensitive_artifacts(tmp_path: Path):
     assert set(deleted) == {"docs_sample.jsonl", "queries_extracted.jsonl", "replay.json"}
 
 
+def test_retention_summary_only_deletes_detail_artifacts(tmp_path: Path):
+    for name in ("compare.json", "report.json", "replay.json", "rootcauses.json"):
+        (tmp_path / name).write_text("x", encoding="utf-8")
+    deleted = enforce_retention(tmp_path, persist_sensitive=False, summary_only=True)
+    assert "compare.json" in deleted
+    assert "replay.json" in deleted
+    assert "rootcauses.json" in deleted
+    assert not (tmp_path / "compare.json").exists()
+    # report.json remains for summary-only sharing
+    assert (tmp_path / "report.json").exists()
+
+
 def test_privacy_profile_and_report():
     profile = resolve_privacy_profile("export-safe")
     assert profile.export_safe is True

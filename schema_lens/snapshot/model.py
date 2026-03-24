@@ -18,7 +18,7 @@ class SnapshotManifest:
     system_path: str = "snapshot.system.json"
     collection_path: str = "snapshot.collection.json"
     hash: str = ""
+    compatibility: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-

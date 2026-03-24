@@ -202,11 +202,11 @@ performance:
     store_docvalues_heuristics: true
 
 security:
-  profile: "enterprise-safe" # local-dev | enterprise-safe | no-persist-sensitive | redacted-artifacts-only
+  profile: "enterprise-safe" # local-dev | enterprise-safe | no-sensitive-artifacts | summary-only
   # optional external YAML file merged into this section:
   # config: "examples/security/basic_auth_env.yaml"
   baseline_auth:
-    type: "none" # none | basic | bearer | mtls | plugin | kerberos
+    type: "none" # none | basic | bearer | mtls | plugin
     # basic:
     # username_env: "SCHEMA_LENS_SOLR_USER"
     # password_env: "SCHEMA_LENS_SOLR_PASSWORD"
@@ -216,7 +216,7 @@ security:
     # cert_file: "./certs/client.pem"
     # key_file: "./certs/client.key"
     # ca_file: "./certs/ca.pem"
-    # plugin/kerberos:
+    # plugin:
     # provider: "my_auth_plugin"
   shadow_auth:
     type: "none"
@@ -290,8 +290,8 @@ privacy:
 - `security.profile` must be one of:
   - `local-dev`
   - `enterprise-safe`
-  - `no-persist-sensitive`
-  - `redacted-artifacts-only`
+  - `no-sensitive-artifacts`
+  - `summary-only`
 
 ## Supported operations
 

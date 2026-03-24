@@ -123,6 +123,46 @@
       {% endif %}
     </div>
 
+    <div class="card" id="compatibility-summary">
+      <h2>Compatibility &amp; Capability Summary</h2>
+      {% set compat = report.compatibility or {} %}
+      {% set compat_version = compat.version or {} %}
+      {% if compat.solr_version or compat.env1 or compat.env2 %}
+      {% if compat.solr_version %}
+      <table>
+        <tr><th>Detected Solr Version</th><td>{{ compat.solr_version }}</td></tr>
+        <tr><th>Deployment Mode</th><td>{{ compat_version.deployment_mode if compat_version.deployment_mode else "unknown" }}</td></tr>
+        <tr><th>Support Tier</th><td>{{ compat.support_tier if compat.support_tier else "unknown" }}</td></tr>
+        <tr><th>Confidence</th><td>{{ compat.confidence if compat.confidence else "low" }}</td></tr>
+      </table>
+      {% endif %}
+      {% if compat.missing_capabilities %}
+      <p><strong>Missing Capabilities:</strong> {{ compat.missing_capabilities|join(", ") }}</p>
+      {% endif %}
+      {% if compat.disabled_features %}
+      <p><strong>Disabled Features:</strong> {{ compat.disabled_features|join(", ") }}</p>
+      {% endif %}
+      {% if compat.fallbacks %}
+      <h3>Fallbacks</h3>
+      <ul>
+        {% for fb in compat.fallbacks %}
+        <li><code>{{ fb.feature }}</code> → <code>{{ fb.fallback }}</code> ({{ fb.reason }})</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if compat.capability_mismatches %}
+      <h3>Cross-Environment Capability Mismatches</h3>
+      <ul>
+        {% for mm in compat.capability_mismatches %}
+        <li><code>{{ mm.capability }}</code>: env1={{ mm.env1 }} env2={{ mm.env2 }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% else %}
+      <p class="muted">Compatibility summary not available.</p>
+      {% endif %}
+    </div>
+
     <div class="card">
       <h2>Summary</h2>
       <table>

@@ -1,0 +1,7 @@
+{
+  "metrics": {
+    "solr.jvm": {
+      "memory.heap.used": 123456
+    }
+  }
+}

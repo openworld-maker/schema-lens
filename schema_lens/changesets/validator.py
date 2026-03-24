@@ -19,10 +19,10 @@ VECTOR_NORMALIZE = {"none", "minmax", "zscore"}
 SECURITY_PROFILES = {
     "local-dev",
     "enterprise-safe",
-    "no-persist-sensitive",
-    "redacted-artifacts-only",
+    "no-sensitive-artifacts",
+    "summary-only",
 }
-SECURITY_AUTH_TYPES = {"none", "basic", "bearer", "mtls", "plugin", "kerberos"}
+SECURITY_AUTH_TYPES = {"none", "basic", "bearer", "mtls", "plugin"}
 GOV_PROMOTION_STATES = {"dev", "stage", "prod_candidate", "prod_approved"}
 PRIVACY_PROFILES = {"off", "default", "export-safe"}
 
@@ -195,7 +195,25 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
             report.errors.append(
                 f"security.profile must be one of {sorted(SECURITY_PROFILES)}"
             )
-        for auth_field in ("baseline_auth", "shadow_auth"):
+        for bool_field in (
+            "redact_query_text",
+            "redact_doc_ids",
+            "hash_doc_ids",
+            "persist_raw_requests",
+            "persist_raw_docs",
+            "persist_debug_payloads",
+        ):
+            value = security.get(bool_field)
+            if value is not None and not isinstance(value, bool):
+                report.errors.append(f"security.{bool_field} must be boolean")
+        sensitive_fields = security.get("sensitive_fields")
+        if sensitive_fields is not None and (
+            not isinstance(sensitive_fields, list)
+            or not all(isinstance(item, str) for item in sensitive_fields)
+        ):
+            report.errors.append("security.sensitive_fields must be a list of strings")
+
+        for auth_field in ("auth", "baseline_auth", "shadow_auth"):
             auth_cfg = security.get(auth_field)
             if auth_cfg is not None and not isinstance(auth_cfg, dict):
                 report.errors.append(f"security.{auth_field} must be an object")
@@ -221,7 +239,14 @@ def validate_changeset(changeset: Changeset, check_paths: bool = True) -> Valida
                     report.errors.append(
                         f"security.{auth_field} bearer auth requires token or *_env/*_file"
                     )
-                if auth_type in {"plugin", "kerberos"} and not auth_cfg.get("provider"):
+                if auth_type == "mtls":
+                    if not any(auth_cfg.get(name) for name in ("cert_file", "cert_path", "cert")):
+                        report.errors.append(f"security.{auth_field} mtls auth requires cert_file")
+                    if auth_cfg.get("key_required", True) and not any(
+                        auth_cfg.get(name) for name in ("key_file", "key_path", "key")
+                    ):
+                        report.errors.append(f"security.{auth_field} mtls auth requires key_file")
+                if auth_type == "plugin" and not auth_cfg.get("provider"):
                     report.errors.append(
                         f"security.{auth_field} {auth_type} auth requires provider plugin name"
                     )

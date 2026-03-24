@@ -4,8 +4,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from schema_lens.compat import capabilities_for_version, compatibility_contract, detect_solr_version
+from schema_lens.compat import (
+    capabilities_for_version,
+    compatibility_contract,
+    detect_solr_version,
+    detect_version_info,
+    probe_runtime_capabilities,
+)
 from schema_lens.compat.adapters import (
+    configset_download_supported,
     configset_upload_supported,
     metrics_supported,
     structured_explain_supported,
@@ -35,6 +42,7 @@ def run_snapshot_and_compat(
     verbose: bool,
     outputs: dict[str, str],
     manifest_inputs: dict[str, Any],
+    baseline_client: Any | None = None,
 ) -> SnapshotCompatRuntime:
     if snapshot_path:
         snapshot_data = load_snapshot(snapshot_path.resolve())
@@ -84,8 +92,19 @@ def run_snapshot_and_compat(
     write_json(Path(outputs["inspect_json"]), inspect_payload)
 
     compat_version = detect_solr_version(system)
-    compat_caps = capabilities_for_version(compat_version)
-    compat_payload = compatibility_contract(compat_version)
+    probe_results: dict[str, bool] | None = None
+    if baseline_client is not None:
+        probe_results = probe_runtime_capabilities(
+            client=baseline_client,
+            collection=baseline_collection,
+        )
+
+    compat_caps = capabilities_for_version(compat_version, probe_results=probe_results)
+    compat_payload = compatibility_contract(
+        detect_version_info(system),
+        system_info=system,
+        probe_results=probe_results,
+    )
     compat_payload["degraded_features"] = []
     if not vector_supported(compat_caps):
         compat_payload["degraded_features"].append("vector_hybrid")
@@ -95,6 +114,23 @@ def run_snapshot_and_compat(
         compat_payload["degraded_features"].append("metrics_capture")
     if not configset_upload_supported(compat_caps):
         compat_payload["degraded_features"].append("configset_upload")
+    if not configset_download_supported(compat_caps):
+        compat_payload["degraded_features"].append("configset_download")
+
+    compat_payload.setdefault("warnings", [])
+    if probe_results is not None and not probe_results.get("metrics_json", True):
+        compat_payload["warnings"].append(
+            "Using /admin/mbeans fallback because /admin/metrics JSON was not supported."
+        )
+    if not vector_supported(compat_caps):
+        compat_payload["warnings"].append(
+            f"Detected Solr {compat_version or 'unknown'}; vector scenarios disabled because vector capability is not available."
+        )
+
+    snapshot_manifest_payload = inspect_payload.get("snapshot_manifest", {})
+    if isinstance(snapshot_manifest_payload, dict):
+        snapshot_manifest_payload["compatibility"] = compat_payload
+        write_json(Path(outputs["snapshot_json"]), snapshot_manifest_payload)
 
     return SnapshotCompatRuntime(
         baseline_schema=baseline_schema,

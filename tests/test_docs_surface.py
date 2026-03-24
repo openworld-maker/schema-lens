@@ -23,6 +23,20 @@ def test_docs_surface_assets_and_workflow_present() -> None:
     examples_index = repo / "docs" / "examples.md"
     assert examples_index.exists()
     assert "3-minute offline demo" in examples_index.read_text(encoding="utf-8").lower()
+    security_doc = repo / "docs" / "security.md"
+    assert security_doc.exists()
+    assert "follow-up tasks" in security_doc.read_text(encoding="utf-8").lower()
+    security_roadmap = repo / "docs" / "roadmap_security.md"
+    assert security_roadmap.exists()
+    compat_doc = repo / "docs" / "solr_compatibility.md"
+    assert compat_doc.exists()
+    assert "follow-up tasks" in compat_doc.read_text(encoding="utf-8").lower()
+    compat_roadmap = repo / "docs" / "roadmap_compatibility.md"
+    assert compat_roadmap.exists()
+    api_server_doc = repo / "docs" / "api_server.md"
+    api_text = api_server_doc.read_text(encoding="utf-8")
+    assert "## Follow-up Tasks" in api_text
+    assert "### Next 3 Most Important Production Features" in api_text
 
 
 def test_first_time_evaluator_script_present_and_executable() -> None:

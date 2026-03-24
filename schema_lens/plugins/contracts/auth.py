@@ -25,7 +25,7 @@ class AuthProviderPlugin(BasePlugin):
         for key, value in config.items():
             key_lower = key.lower()
             if any(token in key_lower for token in ("token", "password", "secret", "key")):
-                safe[key] = "<redacted>"
+                safe[key] = "***REDACTED***"
             else:
                 safe[key] = value
         return safe

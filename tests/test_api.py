@@ -12,14 +12,30 @@ from schema_lens.api.app import create_api_app
 from schema_lens.api.jobs import JobManager
 from schema_lens.api.models import ApiJob, RunCreateRequest
 from schema_lens.api.storage import ApiStorage
+from schema_lens.api.services.run_service import RunService
 from schema_lens.util.io import write_json
 
 
 def _fake_run_executor(changeset_path: Path, request: RunCreateRequest, out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    write_json(out_dir / "report.json", {"summary": {"queries_total": 1, "high_risk_percent": 0.0}})
+    write_json(
+        out_dir / "report.json",
+        {
+            "summary": {"queries_total": 1, "high_risk_percent": 0.0},
+            "compatibility": {
+                "solr_version": "9.7.0",
+                "support_tier": "recommended",
+                "confidence": "high",
+                "missing_capabilities": [],
+            },
+        },
+    )
     write_json(out_dir / "report.html", {"ok": True})
     write_json(out_dir / "compare.json", {"summary": {"avg_overlap": 1.0}, "diffs": []})
+    write_json(
+        out_dir / "run_manifest.json",
+        {"settings": {"security": {"profile": "local-dev"}}},
+    )
 
 
 def _fake_compare_executor(job: ApiJob) -> tuple[dict, dict]:
@@ -75,7 +91,39 @@ def test_health_and_capabilities(tmp_path: Path) -> None:
     payload = caps.json()
     assert payload["service"] == "solrguard-api"
     assert "runs" in payload["features"]
+    assert "vector_supported" in payload["solr_hints"]["capability_flags"]
     assert client.get("/plugins").status_code == 200
+
+
+def test_run_service_metadata_includes_compatibility(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    storage = ApiStorage(tmp_path)
+    service = RunService(storage)
+    job = ApiJob(
+        job_id="job-1",
+        job_type="run",
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        request_payload={
+            "changeset_inline_yaml": "baseline:\\n  solr_url: http://localhost:8983/solr\\n  collection: products\\n"
+        },
+    )
+
+    def _fake_cli_run(**kwargs: object) -> None:
+        out_dir = Path(str(kwargs["out"]))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        write_json(
+            out_dir / "report.json",
+            {
+                "summary": {"queries_total": 1},
+                "compatibility": {"solr_version": "9.7.0", "support_tier": "recommended", "confidence": "high"},
+            },
+        )
+        write_json(out_dir / "report.html", {"ok": True})
+        write_json(out_dir / "compare.json", {"summary": {"avg_overlap": 1.0}})
+
+    monkeypatch.setattr("schema_lens.api.services.run_service.cli_run", _fake_cli_run)
+    _, metadata = service.execute(job)
+    assert metadata["compatibility"]["support_tier"] == "recommended"
 
 
 def test_post_runs_and_get_status_and_summary(tmp_path: Path) -> None:
@@ -168,3 +216,31 @@ def test_gate_compat_endpoint(tmp_path: Path) -> None:
     resp = client.post("/gate", json={"compare_path": str(compare_path), "policy_path": str(policy_path)})
     assert resp.status_code == 200
     assert resp.json()["pass"] is True
+
+
+def test_artifact_list_honors_summary_only_profile(tmp_path: Path) -> None:
+    client = _app_with_fakes(tmp_path)
+    created = client.post(
+        "/runs",
+        json={
+            "changeset_inline_yaml": "baseline:\\n  solr_url: http://localhost:8983/solr\\n  collection: products\\n"
+        },
+    )
+    job_id = created.json()["job_id"]
+    _wait_for_status(client, f"/runs/{job_id}", "succeeded")
+
+    # emulate summary-only profile in generated manifest
+    run_dir = tmp_path / "runs" / job_id
+    write_json(
+        run_dir / "run_manifest.json",
+        {"settings": {"security": {"profile": "summary-only"}}},
+    )
+
+    artifacts = client.get(f"/artifacts/{job_id}")
+    assert artifacts.status_code == 200
+    names = {item["name"] for item in artifacts.json()["artifacts"]}
+    assert "report.json" in names
+    assert "compare.json" not in names
+
+    denied = client.get(f"/artifacts/{job_id}/compare.json")
+    assert denied.status_code in {403, 404}

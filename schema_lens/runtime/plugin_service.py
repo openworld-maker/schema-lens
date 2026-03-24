@@ -35,6 +35,7 @@ class PluginRuntime:
     settings: dict[str, Any] = field(default_factory=dict)
     manifest: PluginRunManifest = field(default_factory=PluginRunManifest)
     plugins_root: Path | None = None
+    allow_sensitive_outputs: bool = True
 
 
 def plugin_artifact_paths(out_dir: Path, plugin_name: str) -> PluginArtifactPaths:
@@ -97,6 +98,16 @@ def _write_plugin_artifact(
 ) -> str:
     paths = plugin_artifact_paths(out_dir.resolve(), plugin.metadata.name)
     normalized_payload = normalize_plugin_payload(payload)
+    if (
+        isinstance(normalized_payload, dict)
+        and bool(normalized_payload.get("sensitive", False))
+        and not runtime.allow_sensitive_outputs
+    ):
+        normalized_payload = {
+            "sensitive": True,
+            "status": "suppressed_by_security_profile",
+        }
+        warning = (warning or "") + " sensitive plugin output suppressed by security profile"
     result_payload = {"plugin": plugin.metadata.name, "phase": phase, "result": normalized_payload}
     write_json(paths.result_json, result_payload)
     debug_payload = read_json(paths.debug_json) if paths.debug_json.exists() else {"stages": []}
@@ -173,6 +184,16 @@ def initialize_plugins(
         issues=issues,
         active_by_type={},
         plugins_root=(out_dir / "plugins"),
+        allow_sensitive_outputs=(
+            str(
+                (
+                    changeset_raw.get("security", {})
+                    if isinstance(changeset_raw.get("security"), dict)
+                    else {}
+                ).get("profile", "local-dev")
+            ).strip().lower()
+            not in {"no-sensitive-artifacts", "summary-only"}
+        ),
     )
     ensure_dir(runtime.plugins_root)
     runtime.settings = {

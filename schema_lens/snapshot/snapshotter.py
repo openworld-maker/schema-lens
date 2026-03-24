@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from schema_lens.compat import compatibility_contract, detect_version_info
 from schema_lens.http.client import SolrHttpClient
 from schema_lens.snapshot.model import SnapshotManifest
 from schema_lens.solr.admin_api import system_info
@@ -96,6 +97,7 @@ def capture_snapshot(
         system_path=system_path.name,
         collection_path=collection_path.name,
         hash=snap_hash,
+        compatibility=compatibility_contract(detect_version_info(system), system_info=system),
     )
     write_json(manifest_path, manifest.to_dict())
     return {
@@ -144,4 +146,3 @@ def load_snapshot(snapshot_dir: Path) -> dict[str, Any]:
         "collection_state": collection_state,
         "hash": computed,
     }
-

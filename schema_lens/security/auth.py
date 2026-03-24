@@ -2,61 +2,21 @@
 
 from __future__ import annotations
 
-import base64
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from schema_lens.plugins.contracts.auth import AuthProviderPlugin
-from schema_lens.security.secrets import resolve_secret_field
+from schema_lens.security.auth_models import AuthMaterial
+from schema_lens.security.errors import AuthProviderError
+from schema_lens.security.providers.basic_auth import build_basic_auth
+from schema_lens.security.providers.bearer_auth import build_bearer_auth
+from schema_lens.security.providers.mtls_auth import build_mtls_auth
+from schema_lens.security.providers.none_auth import build_none_auth
+from schema_lens.security.secrets import resolve_auth_config
 
 
-@dataclass
-class AuthMaterial:
-    mode: str
-    headers: dict[str, str] = field(default_factory=dict)
-    cert: str | tuple[str, str] | None = None
-    verify: bool | str = True
-
-
-class AuthResolutionError(ValueError):
+class AuthResolutionError(AuthProviderError):
     """Raised when auth config cannot be resolved."""
-
-
-def _resolve_mtls_paths(auth_cfg: dict[str, Any], *, base_dir: Path) -> tuple[str | tuple[str, str], bool | str]:
-    cert_file = str(auth_cfg.get("cert_file", "")).strip()
-    key_file = str(auth_cfg.get("key_file", "")).strip()
-    ca_file = str(auth_cfg.get("ca_file", "")).strip()
-    verify = auth_cfg.get("verify", True)
-
-    if not cert_file:
-        raise AuthResolutionError("mtls auth requires cert_file")
-
-    cert_path = Path(cert_file)
-    if not cert_path.is_absolute():
-        cert_path = (base_dir / cert_path).resolve()
-
-    if key_file:
-        key_path = Path(key_file)
-        if not key_path.is_absolute():
-            key_path = (base_dir / key_path).resolve()
-        cert: str | tuple[str, str] = (str(cert_path), str(key_path))
-    else:
-        cert = str(cert_path)
-
-    verify_value: bool | str
-    if isinstance(verify, bool):
-        verify_value = verify
-    else:
-        verify_value = str(verify)
-
-    if ca_file:
-        ca_path = Path(ca_file)
-        if not ca_path.is_absolute():
-            ca_path = (base_dir / ca_path).resolve()
-        verify_value = str(ca_path)
-
-    return cert, verify_value
 
 
 def resolve_auth_material(
@@ -68,32 +28,46 @@ def resolve_auth_material(
 ) -> AuthMaterial:
     cfg = auth_cfg if isinstance(auth_cfg, dict) else {}
     mode = str(cfg.get("type", "none")).strip().lower()
+    resolved = resolve_auth_config(cfg, base_dir=base_dir)
 
     if mode in {"", "none"}:
-        return AuthMaterial(mode="none")
+        return build_none_auth()
 
     if mode == "basic":
-        username = resolve_secret_field(cfg, "username", base_dir=base_dir)
-        password = resolve_secret_field(cfg, "password", base_dir=base_dir)
-        if username is None or password is None:
-            raise AuthResolutionError("basic auth requires username and password")
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        return AuthMaterial(mode="basic", headers={"Authorization": f"Basic {token}"})
+        username = resolved.get("username")
+        password = resolved.get("password")
+        if not username or not password:
+            raise AuthResolutionError("basic auth requires non-empty username and password")
+        return build_basic_auth(str(username), str(password))
 
     if mode == "bearer":
-        token = resolve_secret_field(cfg, "token", base_dir=base_dir)
-        if token is None:
-            raise AuthResolutionError("bearer auth requires token")
-        return AuthMaterial(mode="bearer", headers={"Authorization": f"Bearer {token}"})
+        token = resolved.get("token")
+        if not token:
+            raise AuthResolutionError("bearer auth requires non-empty token")
+        return build_bearer_auth(str(token))
 
     if mode == "mtls":
-        cert, verify = _resolve_mtls_paths(cfg, base_dir=base_dir)
-        return AuthMaterial(mode="mtls", cert=cert, verify=verify)
+        cert_file = resolved.get("cert_file")
+        key_file = resolved.get("key_file")
+        ca_file = resolved.get("ca_file")
+        verify = cfg.get("verify", True)
+        if not cert_file:
+            raise AuthResolutionError("mtls auth requires cert_file")
+        try:
+            return build_mtls_auth(
+                cert_file=str(cert_file),
+                key_file=str(key_file) if key_file else None,
+                ca_file=str(ca_file) if ca_file else None,
+                base_dir=base_dir,
+                verify=verify if isinstance(verify, (bool, str)) else True,
+            )
+        except AuthProviderError as exc:
+            raise AuthResolutionError(str(exc)) from exc
 
-    if mode in {"plugin", "kerberos"}:
+    if mode == "plugin":
         plugin_name = str(cfg.get("provider", "")).strip()
         if not plugin_name:
-            raise AuthResolutionError(f"{mode} auth requires provider plugin name")
+            raise AuthResolutionError("plugin auth requires provider plugin name")
         plugin_cfg = cfg.get("plugin_config", {})
         if not isinstance(plugin_cfg, dict):
             plugin_cfg = {}

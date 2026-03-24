@@ -11,6 +11,8 @@ from schema_lens.http.client import SolrHttpClient
 from schema_lens.security import (
     AuthResolutionError,
     build_audit_record,
+    parse_audit_config,
+    parse_security_config,
     redact_auth_config,
     resolve_auth_material,
     resolve_profile,
@@ -57,14 +59,22 @@ def initialize_security(
             raise StageError("security.config YAML must be an object")
         security_cfg = {**loaded_cfg, **security_cfg}
 
-    profile = resolve_profile(str(security_cfg.get("profile", "local-dev")))
-    extra_sensitive_keys_raw = security_cfg.get("extra_sensitive_keys", [])
-    extra_sensitive_keys = [str(item) for item in extra_sensitive_keys_raw if isinstance(item, str)]
+    security_model = parse_security_config(security_cfg)
+    try:
+        profile = resolve_profile(security_model.profile)
+    except ValueError as exc:
+        raise StageError(str(exc)) from exc
+    extra_sensitive_keys = list(security_model.sensitive_fields)
 
+    global_auth_cfg = security_cfg.get("auth") if isinstance(security_cfg.get("auth"), dict) else {}
     baseline_auth_cfg = (
         security_cfg.get("baseline_auth")
         if isinstance(security_cfg.get("baseline_auth"), dict)
-        else (baseline_cfg.get("auth") if isinstance(baseline_cfg.get("auth"), dict) else {})
+        else (
+            baseline_cfg.get("auth")
+            if isinstance(baseline_cfg.get("auth"), dict)
+            else global_auth_cfg
+        )
     )
     shadow_auth_cfg = (
         security_cfg.get("shadow_auth")
@@ -113,25 +123,30 @@ def initialize_security(
         verbose=verbose,
     )
 
-    audit_cfg = security_cfg.get("audit", {})
-    if not isinstance(audit_cfg, dict):
-        audit_cfg = {}
-    requested_by = str(audit_cfg.get("requested_by")) if audit_cfg.get("requested_by") is not None else None
-    approval_reference = (
-        str(audit_cfg.get("approval_reference")) if audit_cfg.get("approval_reference") is not None else None
-    )
+    top_level_audit = changeset_raw.get("audit", {})
+    if not isinstance(top_level_audit, dict):
+        top_level_audit = {}
+    nested_audit = security_cfg.get("audit", {})
+    if not isinstance(nested_audit, dict):
+        nested_audit = {}
+    audit_cfg = {**top_level_audit, **nested_audit}
+    audit_model = parse_audit_config(audit_cfg)
     audit_record = build_audit_record(
         run_id=run_id,
         timestamp=started,
         profile=profile.name,
-        requested_by=requested_by,
-        approval_reference=approval_reference,
+        requested_by=audit_model.requested_by,
+        team=audit_model.team,
+        ticket_id=audit_model.ticket_id,
+        environment_label=audit_model.environment_label,
+        notes=audit_model.notes,
         baseline_url=baseline_url,
         baseline_collection=baseline_collection,
         shadow_url=shadow_url,
         shadow_collection=str(shadow_cfg.get("name_prefix", "shadow")),
         baseline_auth_mode=baseline_auth.mode,
         shadow_auth_mode=shadow_auth.mode,
+        plugins=[plugin.metadata.name for plugin in active_auth_plugins if hasattr(plugin, "metadata")],
     )
 
     write_audit(audit_record, profile.redact_artifacts, extra_sensitive_keys)
@@ -140,6 +155,10 @@ def initialize_security(
         "profile": profile.name,
         "redact_artifacts": profile.redact_artifacts,
         "persist_sensitive_artifacts": profile.persist_sensitive_artifacts,
+        "summary_only": profile.summary_only,
+        "persist_raw_requests": profile.persist_raw_requests and security_model.persist_raw_requests,
+        "persist_raw_docs": profile.persist_raw_docs and security_model.persist_raw_docs,
+        "persist_debug_payloads": profile.persist_debug_payloads and security_model.persist_debug_payloads,
         "extra_sensitive_keys": extra_sensitive_keys,
         "baseline_auth": {
             "type": baseline_auth.mode,

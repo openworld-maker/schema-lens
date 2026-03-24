@@ -664,6 +664,44 @@ cat out/demo/report.json
 open out/demo/report.html
 ```
 
+## Quickstart (`check` mode, near-zero setup)
+
+Single-command safety verdict:
+
+```bash
+solrguard check examples/changesets/fieldtype-change.yaml --out out/check_demo
+```
+
+Config-free local mode (tries local Solr first, falls back to offline demo dataset):
+
+```bash
+solrguard check --live --out out/check_live
+```
+
+CI threshold mode:
+
+```bash
+solrguard check examples/changesets/fieldtype-change.yaml --fail-on-risk HIGH_RISK
+```
+
+PR comment mode:
+
+```bash
+solrguard check examples/changesets/fieldtype-change.yaml --pr-comment-out out/pr_comment.md
+```
+
+Auto query-log ingestion:
+
+```bash
+solrguard queries ingest --from /var/log/solr/requests.log --out out/queries_ingested.jsonl
+```
+
+Real-time drift loop:
+
+```bash
+solrguard monitor-live --baseline-snapshot out/demo --queries out/queries_ingested.jsonl --interval 5m --iterations 12 --out out/monitor_live
+```
+
 ## Quickstart (synonym rewrite impact)
 
 This scenario simulates a production-style synonym/stopword configset update and captures rewrite
@@ -752,6 +790,7 @@ solrguard compatibility --from-file examples/compat/solr9_system_info.json
 
 ### Primary commands
 
+- `solrguard check [changeset.yaml] [--live] [--query-log PATH] [--fail-on-risk LEVEL]`
 - `solrguard validate <changeset.yaml>`
 - `solrguard inspect --solr-url URL --collection NAME --out PATH`
 - `solrguard snapshot --solr-url URL --collection NAME --out DIR`
@@ -947,49 +986,64 @@ Developer guide and examples:
 
 ## Security Mode
 
-Security controls are optional and backward compatible. Configure under `security` in a changeset:
+Enterprise security controls are opt-in and designed for production-like Solr environments:
 
 ```yaml
 security:
   profile: enterprise-safe
-  baseline_auth:
-    type: basic
-    username_env: SCHEMA_LENS_SOLR_USER
-    password_env: SCHEMA_LENS_SOLR_PASSWORD
-  shadow_auth:
+  auth:
     type: bearer
-    token_env: SCHEMA_LENS_SOLR_TOKEN
-  audit:
-    requested_by: "user@example.com"
-    approval_reference: "CR-12345"
+    token: "${SOLR_BEARER_TOKEN}"
+  redact_query_text: true
+  redact_doc_ids: true
+  hash_doc_ids: true
+  persist_raw_requests: false
+  persist_raw_docs: false
+  persist_debug_payloads: false
+  sensitive_fields:
+    - "SupplierId"
+    - "contractText"
+
+audit:
+  enabled: true
+  requested_by: "user@example.com"
+  team: "search-platform"
+  ticket_id: "CR-12345"
+  environment_label: "prod-us"
 ```
 
 Supported auth modes:
 
 - `none`
-- `basic` (inline, `_env`, `_file`)
-- `bearer` (inline, `_env`, `_file`)
+- `basic` (supports `${ENV_VAR}` and `file:/path` references)
+- `bearer` (supports `${ENV_VAR}` and `file:/path` references)
 - `mtls` (`cert_file`, optional `key_file`, optional `ca_file`)
-- `plugin` / `kerberos` (via auth provider plugin)
+- `plugin` (via auth provider plugin)
 
 Security profiles:
 
 - `local-dev`
 - `enterprise-safe`
-- `no-persist-sensitive`
-- `redacted-artifacts-only`
+- `no-sensitive-artifacts`
+- `summary-only`
 
 Behavior:
 
-- secrets are redacted from `run_manifest.json`, `compare.json`, and `report.json` when redaction is enabled
-- `Authorization` headers are always masked in stored payloads
-- `audit.json` records requester, approval reference, target cluster/collection, and auth mode (never secret values)
+- secrets are redacted as `***REDACTED***` in persisted payloads
+- auth headers and credential-bearing URLs are masked before artifact persistence
+- `audit.json` records requester/team/ticket/environment/auth mode and never stores secrets
+- `summary-only` suppresses detailed artifacts and keeps summary/audit/report outputs
 
 Examples:
 
 - `examples/security/basic_auth_env.yaml`
 - `examples/security/bearer_token_env.yaml`
-- `examples/security/mtls_config.yaml`
+- `examples/security/mtls_auth.yaml`
+- `examples/security/enterprise_safe_profile.yaml`
+- `examples/security/summary_only_profile.yaml`
+- `examples/security/.env.example`
+
+Detailed guide: [docs/security.md](docs/security.md)
 
 ## Solr Compatibility
 
@@ -1031,6 +1085,7 @@ solrguard compatibility --target http://localhost:8983/solr
 See:
 
 - [docs/compatibility.md](docs/compatibility.md)
+- [docs/solr_compatibility.md](docs/solr_compatibility.md)
 - [docs/enterprise/compatibility-matrix.md](docs/enterprise/compatibility-matrix.md)
 
 ## API Server Mode
@@ -1390,7 +1445,7 @@ and extension rules for new tracks.
 - Getting started: [docs/usage-guide.md](docs/usage-guide.md)
 - Architecture: [docs/architecture.md](docs/architecture.md)
 - Compatibility: [docs/compatibility.md](docs/compatibility.md)
-- Security: [docs/enterprise/security.md](docs/enterprise/security.md)
+- Security: [docs/security.md](docs/security.md)
 - Governance: [docs/enterprise/policies.md](docs/enterprise/policies.md)
 - Rollout: [docs/enterprise/gitops.md](docs/enterprise/gitops.md)
 - Observability: [docs/enterprise/observability.md](docs/enterprise/observability.md)
@@ -1508,6 +1563,7 @@ Future direction:
 Roadmap docs:
 
 - `docs/roadmap_api_server.md`
+- `docs/roadmap_security.md`
 - `docs/enterprise/backlog_next_issues.md`
 
 ## Contributing

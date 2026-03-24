@@ -34,6 +34,23 @@ def capabilities(request: Request) -> CapabilitiesResponse:
         solr_hints={
             "compatibility_probe": "/admin/info/system",
             "supported_versions": ["8.x", "9.x", "10.x"],
+            "capability_flags": [
+                "metrics_json_supported",
+                "metrics_mbeans_supported",
+                "configset_upload_supported",
+                "configset_download_supported",
+                "collections_api_supported",
+                "alias_ops_supported",
+                "luke_supported",
+                "structured_explain_supported",
+                "parsedquery_available",
+                "vector_supported",
+                "vector_native_hybrid_supported",
+                "json_request_supported",
+                "ltr_possible",
+                "feature_logging_possible",
+                "package_manager_possible",
+            ],
         },
         security={
             "local_only": bool(getattr(request.app.state, "local_only", True)),

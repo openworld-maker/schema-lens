@@ -11,12 +11,26 @@ SENSITIVE_ARTIFACTS = {
     "replay.json",
 }
 
+SUMMARY_ONLY_EXTRA_ARTIFACTS = {
+    "compare.json",
+    "env_compare.json",
+    "rootcauses.json",
+    "recommendations.json",
+    "perf_metrics.json",
+    "ltr_impact.json",
+    "plugins.json",
+    "queries_scored.jsonl",
+}
 
-def enforce_retention(out_dir: Path, *, persist_sensitive: bool) -> list[str]:
+
+def enforce_retention(out_dir: Path, *, persist_sensitive: bool, summary_only: bool = False) -> list[str]:
     deleted: list[str] = []
-    if persist_sensitive:
+    targets = set(SENSITIVE_ARTIFACTS)
+    if summary_only:
+        targets.update(SUMMARY_ONLY_EXTRA_ARTIFACTS)
+    if persist_sensitive and not summary_only:
         return deleted
-    for name in SENSITIVE_ARTIFACTS:
+    for name in targets:
         path = out_dir / name
         if path.exists() and path.is_file():
             path.unlink()

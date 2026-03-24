@@ -1,13 +1,19 @@
+solrguard_version: 1
+
 security:
   profile: enterprise-safe
-  audit:
-    requested_by: "platform-team@example.com"
-    approval_reference: "CR-12345"
   baseline_auth:
     type: basic
-    username_env: SCHEMA_LENS_SOLR_USER
-    password_env: SCHEMA_LENS_SOLR_PASSWORD
+    username: "${SOLR_USER}"
+    password: "${SOLR_PASSWORD}"
   shadow_auth:
     type: basic
-    username_env: SCHEMA_LENS_SOLR_USER
-    password_env: SCHEMA_LENS_SOLR_PASSWORD
+    username: "${SOLR_USER}"
+    password: "${SOLR_PASSWORD}"
+
+audit:
+  enabled: true
+  requested_by: "platform-team@example.com"
+  team: "search-platform"
+  ticket_id: "CR-12345"
+  environment_label: "prod"

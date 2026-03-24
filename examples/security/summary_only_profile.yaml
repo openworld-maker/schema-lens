@@ -1,0 +1,21 @@
+solrguard_version: 1
+solr:
+  baseline_url: "http://localhost:8983/solr/products"
+  shadow_url: "http://localhost:8983/solr/products_shadow"
+
+security:
+  profile: "summary-only"
+  auth:
+    type: basic
+    username: "${SOLR_USER}"
+    password: "${SOLR_PASSWORD}"
+  persist_raw_requests: false
+  persist_raw_docs: false
+  persist_debug_payloads: false
+
+audit:
+  enabled: true
+  requested_by: "release-manager@example.com"
+  team: "search-governance"
+  ticket_id: "REL-2201"
+  environment_label: "stage"

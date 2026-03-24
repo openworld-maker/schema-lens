@@ -7,6 +7,7 @@ Technical documentation for SolrGuard, the search change governance toolkit for 
 - I want to evaluate a Solr change quickly: [usage-guide.md](usage-guide.md)
 - I want enterprise secure mode: [enterprise/security.md](enterprise/security.md)
 - I want compatibility and fallback expectations: [compatibility.md](compatibility.md)
+- I want detailed Solr version capability guidance: [solr_compatibility.md](solr_compatibility.md)
 - I want policy and approvals guidance: [enterprise/policies.md](enterprise/policies.md)
 - I want rollout orchestration (GitOps/canary/rollback): [enterprise/gitops.md](enterprise/gitops.md)
 - I want deployment options (Docker/Helm/API): [deployment.md](deployment.md)
@@ -25,8 +26,11 @@ Technical documentation for SolrGuard, the search change governance toolkit for 
 ### Compatibility and safety
 
 - [compatibility.md](compatibility.md)
+- [solr_compatibility.md](solr_compatibility.md)
 - [enterprise/compatibility-matrix.md](enterprise/compatibility-matrix.md)
+- [roadmap_compatibility.md](roadmap_compatibility.md)
 - [enterprise/security.md](enterprise/security.md)
+- [security.md](security.md)
 - [enterprise/privacy.md](enterprise/privacy.md)
 
 ### Governance and rollout
@@ -56,6 +60,7 @@ Technical documentation for SolrGuard, the search change governance toolkit for 
 - [major-version-module-migration.md](major-version-module-migration.md)
 - [release-notes-solrguard.md](release-notes-solrguard.md)
 - [roadmap_api_server.md](roadmap_api_server.md)
+- [roadmap_security.md](roadmap_security.md)
 - [enterprise/backlog_next_issues.md](enterprise/backlog_next_issues.md)
 
 ## Trust and operations notes

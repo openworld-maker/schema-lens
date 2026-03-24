@@ -1,0 +1,10 @@
+{
+  "debug": {
+    "parsedquery": "+name:bolt",
+    "parsedquery_toString": "name:bolt",
+    "explain": {
+      "doc1": "sum of:\n  1.0 = weight(name:bolt)",
+      "doc2": "sum of:\n  0.8 = weight(name:bolt)"
+    }
+  }
+}

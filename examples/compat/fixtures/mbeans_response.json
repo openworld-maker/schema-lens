@@ -1,0 +1,15 @@
+{
+  "solr-mbeans": [
+    "CACHE",
+    {
+      "filterCache": {
+        "stats": {
+          "lookups": 80,
+          "inserts": 90,
+          "evictions": 2,
+          "hitratio": 0.88
+        }
+      }
+    }
+  ]
+}

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from schema_lens.runtime.snapshot_compat_service import run_snapshot_and_compat
+from schema_lens.util.io import read_json
 
 
 def test_run_snapshot_and_compat_with_loaded_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -43,3 +44,5 @@ def test_run_snapshot_and_compat_with_loaded_snapshot(monkeypatch: pytest.Monkey
 
     assert runtime.compat_payload["solr_version"].startswith("9")
     assert (out / "inspect.json").exists()
+    snapshot_payload = read_json(out / "snapshot.json")
+    assert "compatibility" in snapshot_payload

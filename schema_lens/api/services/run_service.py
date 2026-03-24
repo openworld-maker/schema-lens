@@ -11,20 +11,13 @@ from schema_lens.api.models import ApiJob
 from schema_lens.api.schemas.run_requests import RunCreateRequest
 from schema_lens.api.storage import ApiStorage
 from schema_lens.cli import run as cli_run
+from schema_lens.security.redaction import redact_dict
 from schema_lens.util.io import read_json
 
 
 def _redact_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    redacted: dict[str, Any] = {}
-    for key, value in payload.items():
-        key_lower = key.lower()
-        if any(token in key_lower for token in ("token", "password", "secret", "key", "auth")):
-            redacted[key] = "<redacted>"
-        elif isinstance(value, dict):
-            redacted[key] = _redact_payload(value)
-        else:
-            redacted[key] = value
-    return redacted
+    redacted = redact_dict(payload)
+    return redacted if isinstance(redacted, dict) else payload
 
 
 class RunService:
@@ -102,11 +95,15 @@ class RunService:
         )
 
         summary: dict[str, Any] = {}
+        compatibility: dict[str, Any] = {}
         report_json_path = out_dir / "report.json"
         if report_json_path.exists():
             report = read_json(report_json_path)
             if isinstance(report, dict):
                 summary = report.get("summary", {}) if isinstance(report.get("summary"), dict) else {}
+                compatibility = (
+                    report.get("compatibility", {}) if isinstance(report.get("compatibility"), dict) else {}
+                )
 
         outputs = {
             "changeset_path": str(changeset_path),
@@ -115,6 +112,13 @@ class RunService:
             "report_json": str((out_dir / "report.json").resolve()),
             "report_html": str((out_dir / "report.html").resolve()),
         }
-        metadata = {"summary": summary}
+        metadata = {
+            "summary": summary,
+            "compatibility": {
+                "solr_version": compatibility.get("solr_version"),
+                "support_tier": compatibility.get("support_tier"),
+                "confidence": compatibility.get("confidence"),
+                "missing_capabilities": compatibility.get("missing_capabilities", []),
+            },
+        }
         return outputs, metadata
-

@@ -74,7 +74,9 @@ class CompareService:
         metadata = {
             "summary": result.get("compare", {}).get("summary", {})
             if isinstance(result.get("compare"), dict)
-            else {}
+            else {},
+            "compatibility": result.get("compare", {}).get("compatibility", {})
+            if isinstance(result.get("compare"), dict)
+            else {},
         }
         return outputs, metadata
-

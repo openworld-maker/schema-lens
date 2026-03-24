@@ -1,0 +1,10 @@
+{
+  "metrics": {
+    "solr.node": {
+      "CONTAINER.fs.totalSpace": 1048576
+    },
+    "solr.prometheus": {
+      "enabled": true
+    }
+  }
+}

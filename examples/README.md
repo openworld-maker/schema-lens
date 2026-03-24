@@ -36,6 +36,9 @@ Categorized index: [docs/examples.md](../docs/examples.md)
 ## Enterprise secure/governance usage
 
 - `enterprise/security/solr9_secured_changeset.yaml`
+- `security/enterprise_safe_profile.yaml`
+- `security/summary_only_profile.yaml`
+- `security/.env.example`
 - `enterprise/governance/prod_promotion_changeset.yaml`
 - `governance/approval_metadata.json`
 - `governance/exception_record.json`

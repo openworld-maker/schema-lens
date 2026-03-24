@@ -17,6 +17,7 @@ def initialize_privacy(
     *,
     changeset_raw: dict[str, Any],
     security_persist_sensitive: bool,
+    security_profile_name: str = "local-dev",
 ) -> PrivacyRuntime:
     privacy_cfg = changeset_raw.get("privacy", {})
     if not isinstance(privacy_cfg, dict):
@@ -26,6 +27,7 @@ def initialize_privacy(
     runtime_cfg = {
         "enabled": profile.name != "off",
         "profile": profile.name,
+        "security_profile": security_profile_name,
         "mask_email": profile.mask_email,
         "mask_uuid": profile.mask_uuid,
         "numeric_id_hash": profile.numeric_id_hash,
@@ -47,14 +49,20 @@ def build_and_enforce_privacy_report(
     runtime_cfg: dict[str, Any],
     persist_sensitive_effective: bool,
 ) -> tuple[dict[str, Any], list[str]]:
+    summary_only = str(runtime_cfg.get("security_profile", "")).strip().lower() == "summary-only"
     deleted = enforce_retention(
         out_dir.resolve(),
         persist_sensitive=bool(persist_sensitive_effective),
+        summary_only=summary_only,
     )
     report = build_privacy_report(
         profile=str(runtime_cfg.get("profile", "off")),
         masked_fields=["email", "uuid", "numeric_id"] if bool(runtime_cfg.get("enabled", False)) else [],
-        dropped_fields=["docs_sample.jsonl"] if bool(runtime_cfg.get("raw_doc_suppression", False)) else [],
+        dropped_fields=(
+            ["docs_sample.jsonl", "queries_extracted.jsonl", "replay.json"]
+            if bool(runtime_cfg.get("raw_doc_suppression", False))
+            else []
+        ),
         retention_deleted=deleted,
         export_safe=bool(runtime_cfg.get("export_safe", False)),
     )

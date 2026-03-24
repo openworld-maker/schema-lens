@@ -1,0 +1,27 @@
+solrguard_version: 1
+solr:
+  baseline_url: "http://localhost:8983/solr/products"
+  shadow_url: "http://localhost:8983/solr/products_shadow"
+
+security:
+  profile: "enterprise-safe"
+  auth:
+    type: bearer
+    token: "${SOLR_BEARER_TOKEN}"
+  redact_query_text: true
+  redact_doc_ids: true
+  hash_doc_ids: true
+  persist_raw_requests: false
+  persist_raw_docs: false
+  persist_debug_payloads: false
+  sensitive_fields:
+    - "SupplierId"
+    - "contractText"
+
+audit:
+  enabled: true
+  requested_by: "gaurav@example.com"
+  team: "search-platform"
+  ticket_id: "SOLR-EXAMPLE-1"
+  environment_label: "prod-us"
+  notes: "schema analyzer evaluation"

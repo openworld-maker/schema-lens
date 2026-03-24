@@ -56,3 +56,6 @@ solrguard compatibility --from-file examples/compat/solr10_system_info.json
 - Solr 9: recommended
 - Solr 10: forward-ready framing
 - Unknown/custom distro: low-confidence, safe degradations
+
+For the full capability matrix, probe behavior, fallback rules, and roadmap, see
+[solr_compatibility.md](solr_compatibility.md).

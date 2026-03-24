@@ -1,0 +1,23 @@
+solrguard_version: 1
+solr:
+  baseline_url: "https://solr.example.com/solr/products"
+  shadow_url: "https://solr-shadow.example.com/solr/products_shadow"
+
+security:
+  profile: "enterprise-safe"
+  auth:
+    type: mtls
+    cert_file: "${SOLR_CLIENT_CERT}"
+    key_file: "${SOLR_CLIENT_KEY}"
+    ca_file: "${SOLR_CA_CERT}"
+    verify: true
+  sensitive_fields:
+    - "SupplierId"
+    - "contractText"
+
+audit:
+  enabled: true
+  requested_by: "user@example.com"
+  team: "search-platform"
+  ticket_id: "JIRA-1234"
+  environment_label: "prod-eu"

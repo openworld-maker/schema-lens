@@ -1,15 +1,21 @@
+solrguard_version: 1
+
 security:
   profile: enterprise-safe
-  audit:
-    requested_by: "platform-team@example.com"
-    approval_reference: "CR-12345"
   baseline_auth:
     type: mtls
-    cert_file: "./certs/client.pem"
-    key_file: "./certs/client.key"
-    ca_file: "./certs/ca.pem"
+    cert_file: "${SOLR_CLIENT_CERT}"
+    key_file: "${SOLR_CLIENT_KEY}"
+    ca_file: "${SOLR_CA_CERT}"
   shadow_auth:
     type: mtls
-    cert_file: "./certs/client.pem"
-    key_file: "./certs/client.key"
-    ca_file: "./certs/ca.pem"
+    cert_file: "${SOLR_CLIENT_CERT}"
+    key_file: "${SOLR_CLIENT_KEY}"
+    ca_file: "${SOLR_CA_CERT}"
+
+audit:
+  enabled: true
+  requested_by: "platform-team@example.com"
+  team: "search-platform"
+  ticket_id: "CR-32301"
+  environment_label: "prod"

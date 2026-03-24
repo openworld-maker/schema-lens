@@ -38,7 +38,8 @@ def get_artifact(
         raise HTTPException(status_code=404, detail="job not found") from exc
     except ArtifactNotFoundError as exc:
         raise HTTPException(status_code=404, detail="artifact not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except UnsafePathError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return FileResponse(path)
-

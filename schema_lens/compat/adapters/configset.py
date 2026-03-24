@@ -7,3 +7,7 @@ from typing import Any
 
 def configset_upload_supported(caps: dict[str, Any]) -> bool:
     return bool(caps.get("configset_upload_supported", False))
+
+
+def configset_download_supported(caps: dict[str, Any]) -> bool:
+    return bool(caps.get("configset_download_supported", False))
