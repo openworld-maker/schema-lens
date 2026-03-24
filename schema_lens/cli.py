@@ -7,17 +7,24 @@ import hashlib
 import json
 import logging
 import sys
+import tempfile
 import uuid
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 import typer
+import yaml
 
 from schema_lens.changesets.parser import parse_changeset
 from schema_lens.changesets.validator import validate_changeset
 from schema_lens.ci.summarize import build_ci_summary_markdown
-from schema_lens.compat import capabilities_for_version, compatibility_contract, detect_solr_version
+from schema_lens.compat import (
+    capabilities_for_version,
+    compatibility_contract,
+    detect_solr_version,
+    detect_version_info,
+)
 from schema_lens.compat.adapters import (
     configset_upload_supported,
     metrics_supported,
@@ -47,6 +54,7 @@ from schema_lens.plugins.contracts.report import ReportRendererPlugin, ReportWid
 from schema_lens.plugins.loader import load_plugin_runtime_config, load_plugins, validate_issues
 from schema_lens.plugins.utils import normalize_plugin_payload
 from schema_lens.queries.loader import load_queries
+from schema_lens.queries.normalize import query_fingerprint
 from schema_lens.queries.sampler import sample_queries
 from schema_lens.queries.sanitize import sanitize_params
 from schema_lens.queries.sources.solr_request_log import extract_queries_from_log
@@ -138,6 +146,13 @@ app.add_typer(plugins_app, name="plugins")
 LOGGER = logging.getLogger(__name__)
 _PRIVACY_RUNTIME_CFG: dict[str, Any] = {}
 _LEGACY_ALIAS_WARNED = False
+_RISK_ORDER = {
+    "SAFE": 0,
+    "LOW_RISK": 1,
+    "MEDIUM_RISK": 2,
+    "HIGH_RISK": 3,
+    "BLOCKER": 4,
+}
 
 
 def _hash_obj(data: Any) -> str:
@@ -342,6 +357,312 @@ def _resolve_system_info_payload(
         client.close()
 
 
+def _risk_threshold_value(name: str) -> int:
+    value = _RISK_ORDER.get(name.strip().upper())
+    if value is None:
+        raise typer.BadParameter(
+            f"Unsupported risk level `{name}`. Use one of: {', '.join(_RISK_ORDER.keys())}"
+        )
+    return value
+
+
+def _classify_check_verdict(
+    *,
+    compare_data: dict[str, Any],
+    replay_data: dict[str, Any],
+) -> tuple[str, list[str], dict[str, float]]:
+    summary = compare_data.get("summary", {}) if isinstance(compare_data.get("summary"), dict) else {}
+    performance = (
+        compare_data.get("performance", {})
+        if isinstance(compare_data.get("performance"), dict)
+        else {}
+    )
+    perf_overall = (
+        performance.get("overall", {})
+        if isinstance(performance.get("overall"), dict)
+        else {}
+    )
+    base_latency = (
+        perf_overall.get("baseline_client_latency_ms", {})
+        if isinstance(perf_overall.get("baseline_client_latency_ms"), dict)
+        else {}
+    )
+    shadow_latency = (
+        perf_overall.get("shadow_client_latency_ms", {})
+        if isinstance(perf_overall.get("shadow_client_latency_ms"), dict)
+        else {}
+    )
+    facet_drift = float(summary.get("queries_with_facet_changes_percent", 0.0) or 0.0)
+    avg_overlap = float(summary.get("avg_overlap_ratio", 0.0) or 0.0)
+    if avg_overlap <= 0.0:
+        k = int(compare_data.get("k", 10) or 10)
+        avg_overlap = float(summary.get("avg_overlap", 0.0) or 0.0) / max(k, 1)
+    high_risk_pct = float(summary.get("high_risk_percent", 0.0) or 0.0)
+
+    base_p95 = float(base_latency.get("p95", 0.0) or 0.0)
+    shadow_p95 = float(shadow_latency.get("p95", 0.0) or 0.0)
+    p95_factor = (shadow_p95 / base_p95) if base_p95 > 0 else 1.0
+    p95_delta_pct = ((shadow_p95 - base_p95) / base_p95 * 100.0) if base_p95 > 0 else 0.0
+
+    diffs = compare_data.get("diffs", [])
+    zero_before = 0
+    zero_after = 0
+    if isinstance(diffs, list) and diffs:
+        for row in diffs:
+            if not isinstance(row, dict):
+                continue
+            if int(row.get("numfound_baseline") or 0) <= 0:
+                zero_before += 1
+            if int(row.get("numfound_shadow") or 0) <= 0:
+                zero_after += 1
+    zero_before_pct = (zero_before / max(len(diffs), 1)) * 100.0 if isinstance(diffs, list) else 0.0
+    zero_after_pct = (zero_after / max(len(diffs), 1)) * 100.0 if isinstance(diffs, list) else 0.0
+    zero_delta_pct = zero_after_pct - zero_before_pct
+
+    metrics = {
+        "avg_overlap_ratio": avg_overlap,
+        "high_risk_percent": high_risk_pct,
+        "p95_latency_delta_pct": p95_delta_pct,
+        "facet_drift_percent": facet_drift,
+        "zero_results_delta_pct": zero_delta_pct,
+    }
+
+    reasons: list[str] = []
+    verdict = "SAFE"
+
+    if avg_overlap < 0.7:
+        reasons.append(
+            f"{high_risk_pct:.0f}% high-risk queries with average top-k overlap ratio {avg_overlap:.2f} (< 0.70)."
+        )
+        verdict = "HIGH_RISK"
+    elif avg_overlap < 0.8:
+        reasons.append(f"Average top-k overlap ratio dropped to {avg_overlap:.2f}.")
+        verdict = max([verdict, "MEDIUM_RISK"], key=_RISK_ORDER.get)
+
+    if p95_factor > 1.3:
+        reasons.append(f"p95 latency increased by {p95_delta_pct:.1f}% (>30%).")
+        verdict = "BLOCKER"
+    elif p95_factor > 1.15:
+        reasons.append(f"p95 latency increased by {p95_delta_pct:.1f}%.")
+        verdict = max([verdict, "MEDIUM_RISK"], key=_RISK_ORDER.get)
+
+    if zero_delta_pct > 20.0:
+        reasons.append(f"Zero-result rate increased by {zero_delta_pct:.1f}% (>20%).")
+        verdict = "BLOCKER"
+    elif zero_delta_pct > 10.0:
+        reasons.append(f"Zero-result rate increased by {zero_delta_pct:.1f}%.")
+        verdict = max([verdict, "HIGH_RISK"], key=_RISK_ORDER.get)
+
+    if facet_drift > 15.0:
+        reasons.append(f"Facet drift reached {facet_drift:.1f}% (>15%).")
+        verdict = max([verdict, "MEDIUM_RISK"], key=_RISK_ORDER.get)
+
+    if verdict == "SAFE" and high_risk_pct > 0:
+        verdict = "LOW_RISK"
+        reasons.append(f"{high_risk_pct:.1f}% of queries are classified as high-risk.")
+
+    if not reasons:
+        reasons.append("No blocker/high-risk thresholds were crossed in deterministic safety rules.")
+
+    return verdict, reasons, metrics
+
+
+def _print_check_summary(
+    *,
+    verdict: str,
+    reasons: list[str],
+    root_cause_summaries: list[str],
+    recommendation_summaries: list[str],
+) -> None:
+    icon = "✅"
+    title = "SAFE TO DEPLOY"
+    if verdict in {"LOW_RISK", "MEDIUM_RISK"}:
+        icon = "⚠️"
+        title = "DEPLOY WITH CAUTION"
+    if verdict in {"HIGH_RISK", "BLOCKER"}:
+        icon = "❌"
+        title = "NOT SAFE TO DEPLOY"
+
+    typer.echo(f"{icon} {title}")
+    typer.echo("")
+    typer.echo(f"Risk Level: {verdict}")
+    typer.echo("")
+    typer.echo("Reasons:")
+    for line in reasons[:6]:
+        typer.echo(f"- {line}")
+
+    if root_cause_summaries:
+        typer.echo("")
+        typer.echo("Top Root Causes:")
+        for line in root_cause_summaries[:3]:
+            typer.echo(f"- {line}")
+
+    if recommendation_summaries:
+        typer.echo("")
+        typer.echo("Suggested Fix:")
+        for line in recommendation_summaries[:3]:
+            typer.echo(f"- {line}")
+
+
+def _build_check_markdown(
+    *,
+    verdict: str,
+    reasons: list[str],
+    root_cause_summaries: list[str],
+    recommendation_summaries: list[str],
+) -> str:
+    lines = [
+        "## SolrGuard Check Verdict",
+        "",
+        f"**Risk Level:** `{verdict}`",
+        "",
+        "### Why",
+    ]
+    for reason in reasons[:6]:
+        lines.append(f"- {reason}")
+    if root_cause_summaries:
+        lines.append("")
+        lines.append("### Top Root Causes")
+        for line in root_cause_summaries[:3]:
+            lines.append(f"- {line}")
+    if recommendation_summaries:
+        lines.append("")
+        lines.append("### Suggested Fix")
+        for line in recommendation_summaries[:3]:
+            lines.append(f"- {line}")
+    return "\n".join(lines) + "\n"
+
+
+def _can_connect_local_solr(*, solr_url: str, verbose: bool) -> bool:
+    client = SolrHttpClient(solr_url, verbose=verbose)
+    try:
+        system_info(client)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        client.close()
+
+
+def _auto_generate_queries(*, solr_url: str, collection: str, verbose: bool, out_path: Path) -> Path:
+    client = SolrHttpClient(solr_url, verbose=verbose)
+    try:
+        docs, _ = sample_docs_from_solr(
+            client=client,
+            collection=collection,
+            mode="cursormark",
+            query="*:*",
+            fl="id,title,text,name,description",
+            sort="id asc",
+            sample_n=100,
+            batch_size=50,
+        )
+    finally:
+        client.close()
+
+    queries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for doc in docs:
+        if not isinstance(doc, dict):
+            continue
+        for key in ("title", "name", "text", "description"):
+            value = doc.get(key)
+            if not isinstance(value, str):
+                continue
+            tokens = [token.strip(" ,.;:!?()[]{}\"'").lower() for token in value.split()]
+            tokens = [token for token in tokens if len(token) >= 3]
+            if not tokens:
+                continue
+            q = " ".join(tokens[:2])
+            if q in seen:
+                continue
+            seen.add(q)
+            queries.append({"params": {"q": q}})
+            if len(queries) >= 50:
+                break
+        if len(queries) >= 50:
+            break
+
+    if not queries:
+        queries = [{"params": {"q": "*:*"}}]
+    write_jsonl(out_path, queries)
+    return out_path
+
+
+def _build_live_changeset(
+    *,
+    solr_url: str,
+    collection: str,
+    query_log: Path | None,
+    auto_queries_path: Path,
+) -> dict[str, Any]:
+    source_type = "extract" if query_log is not None else "file"
+    source_path = str(query_log.resolve()) if query_log is not None else str(auto_queries_path.resolve())
+    source_format = "solr_params" if query_log is not None else "jsonl"
+    return {
+        "solrguard_version": 1,
+        "baseline": {
+            "solr_url": solr_url,
+            "collection": collection,
+            "request_defaults": {
+                "rows": 10,
+                "fl": "id,score",
+                "defType": "edismax",
+            },
+        },
+        "shadow": {
+            "mode": "solrcloud",
+            "solr_url": solr_url,
+            "collection_name_template": "{collection}__shadow__{ts}",
+            "num_shards": 1,
+            "replication_factor": 1,
+            "cleanup": True,
+            "allow_shared_configset_fallback": True,
+        },
+        "data": {
+            "docs_source": {
+                "type": "solr_sample",
+                "solr_url": solr_url,
+                "collection": collection,
+                "mode": "cursormark",
+                "query": "*:*",
+                "fl": "*",
+                "sort": "id asc",
+                "sample_n": 5000,
+                "batch_size": 250,
+            }
+        },
+        "queries": {
+            "source": {
+                "type": source_type,
+                "path": source_path,
+                "format": source_format,
+            },
+            "max_queries": 50,
+        },
+        "changes": [],
+        "evaluation": {"k": 10},
+    }
+
+
+def _interval_to_seconds(raw: str) -> int:
+    text = raw.strip().lower()
+    if not text:
+        return 86400
+    if text.endswith("ms"):
+        value = int(text[:-2])
+        return max(1, value // 1000)
+    if text.endswith("s"):
+        return max(1, int(text[:-1]))
+    if text.endswith("m"):
+        return max(1, int(text[:-1]) * 60)
+    if text.endswith("h"):
+        return max(1, int(text[:-1]) * 3600)
+    if text.endswith("d"):
+        return max(1, int(text[:-1]) * 86400)
+    return max(1, int(text))
+
+
 @app.command("detect-capabilities")
 def detect_capabilities(
     solr_url: str | None = typer.Option(None, "--solr-url"),
@@ -353,7 +674,7 @@ def detect_capabilities(
     configure_logging(verbose)
     payload = _resolve_system_info_payload(solr_url=solr_url, from_file=from_file, verbose=verbose)
     version = detect_solr_version(payload)
-    contract = compatibility_contract(version)
+    contract = compatibility_contract(detect_version_info(payload), system_info=payload)
     contract["source"] = "file" if from_file is not None else "live_target"
     contract["version_detected"] = bool(version)
     if out is not None:
@@ -374,18 +695,23 @@ def compatibility(
     configure_logging(verbose)
     payload = _resolve_system_info_payload(solr_url=target, from_file=from_file, verbose=verbose)
     version = detect_solr_version(payload)
+    version_info = detect_version_info(payload)
     caps = capabilities_for_version(version)
-    contract = compatibility_contract(version)
+    contract = compatibility_contract(version_info, system_info=payload)
     summary = {
         "target": target or str(from_file),
         "solr_version": version,
+        "deployment_mode": version_info.deployment_mode,
         "support_tier": contract.get("support_tier"),
         "confidence": contract.get("confidence"),
         "missing_capabilities": contract.get("missing_capabilities", []),
+        "disabled_features": contract.get("disabled_features", []),
         "fallbacks": contract.get("fallbacks", []),
-        "vector_supported": bool(caps.get("vector_query_supported")),
+        "vector_supported": bool(caps.get("vector_supported", caps.get("vector_query_supported"))),
         "structured_explain_supported": bool(caps.get("structured_explain_supported")),
-        "metrics_supported": bool(caps.get("metrics_json_supported")),
+        "metrics_supported": bool(
+            caps.get("metrics_json_supported") or caps.get("metrics_mbeans_supported")
+        ),
         "package_manager_available": bool(caps.get("package_manager_available")),
     }
     if out is not None:
@@ -394,6 +720,202 @@ def compatibility(
         return
     typer.echo(json.dumps(summary, indent=2))
 
+
+@app.command("check")
+def check(
+    changeset_path: Path | None = typer.Argument(None),
+    out: Path = typer.Option(Path("out/check"), "--out"),
+    solr_url: str = typer.Option("http://localhost:8983/solr", "--solr-url"),
+    collection: str = typer.Option("products", "--collection"),
+    live: bool = typer.Option(False, "--live", help="Run config-free local Solr check."),
+    query_log: Path | None = typer.Option(None, "--query-log", exists=True, readable=True),
+    compare_input: Path | None = typer.Option(None, "--compare-input", exists=True, readable=True),
+    fail_on_risk: str | None = typer.Option(
+        None, "--fail-on-risk", help="SAFE|LOW_RISK|MEDIUM_RISK|HIGH_RISK|BLOCKER"
+    ),
+    report: Path | None = typer.Option(None, "--report", help="Optional path to copy generated report.html"),
+    pr_comment_out: Path | None = typer.Option(
+        None,
+        "--pr-comment-out",
+        help="Optional path to write GitHub PR markdown summary.",
+    ),
+    demo_fallback: bool = typer.Option(
+        True, "--demo-fallback/--no-demo-fallback", help="Fallback to offline demo when live run is unavailable."
+    ),
+    verbose: bool = typer.Option(False, "--verbose"),
+) -> None:
+    """Opinionated safety check: run simulation + verdict + root cause + fix guidance."""
+    configure_logging(verbose)
+    ensure_dir(out)
+
+    compare_data: dict[str, Any]
+    replay_data: dict[str, Any]
+    report_json_path: Path | None = None
+    report_html_path: Path | None = None
+
+    if compare_input is not None:
+        compare_data = read_json(compare_input)
+        replay_data = {"stats": {"failures": 0}}
+    else:
+        run_changeset: Path | None = None
+        tmp_changeset_path: Path | None = None
+
+        if changeset_path is not None:
+            run_changeset = changeset_path.resolve()
+            if query_log is not None:
+                payload = yaml.safe_load(run_changeset.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    raise typer.BadParameter("changeset payload must be a YAML object")
+                queries = payload.get("queries")
+                if not isinstance(queries, dict):
+                    queries = {}
+                    payload["queries"] = queries
+                source = queries.get("source")
+                if not isinstance(source, dict):
+                    source = {}
+                    queries["source"] = source
+                source["type"] = "extract"
+                source["path"] = str(query_log.resolve())
+                source["format"] = "solr_params"
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+                ) as fp:
+                    yaml.safe_dump(payload, fp, sort_keys=False)
+                    tmp_changeset_path = Path(fp.name)
+                run_changeset = tmp_changeset_path
+        else:
+            if not live:
+                live = True
+            if live and _can_connect_local_solr(solr_url=solr_url, verbose=verbose):
+                auto_queries = out / "queries.autogen.jsonl"
+                if query_log is None:
+                    _auto_generate_queries(
+                        solr_url=solr_url,
+                        collection=collection,
+                        verbose=verbose,
+                        out_path=auto_queries,
+                    )
+                live_changeset = _build_live_changeset(
+                    solr_url=solr_url,
+                    collection=collection,
+                    query_log=query_log,
+                    auto_queries_path=auto_queries,
+                )
+                tmp_changeset_path = out / "auto.live.check.yaml"
+                write_text(tmp_changeset_path, yaml.safe_dump(live_changeset, sort_keys=False))
+                run_changeset = tmp_changeset_path
+
+        run_failed = False
+        if run_changeset is not None:
+            try:
+                run(
+                    changeset_path=run_changeset,
+                    out=out,
+                    snapshot=None,
+                    k=None,
+                    cleanup=None,
+                    batch_size=100,
+                    scenario=None,
+                    enable_sensitivity=None,
+                    weights=None,
+                    vector_dimension_override=None,
+                    verbose=verbose,
+                )
+            except Exception as exc:  # noqa: BLE001
+                run_failed = True
+                LOGGER.warning("check run failed (%s), evaluating fallback path", exc)
+
+        if run_changeset is None or run_failed:
+            if not demo_fallback:
+                raise typer.Exit(code=1)
+            typer.echo("Local Solr was unavailable or run failed; using offline demo fallback.")
+            compare_payload = read_json(Path("examples/demo/expected/compare.json"))
+            replay_payload = read_json(Path("examples/demo/replay_minimal.json"))
+            manifest_payload = read_json(Path("examples/demo/run_manifest_minimal.json"))
+            compare_data = compare_payload if isinstance(compare_payload, dict) else {}
+            replay_data = replay_payload if isinstance(replay_payload, dict) else {"stats": {"failures": 0}}
+            root_causes = analyze_root_causes(
+                compare_data=compare_data,
+                changes=[],
+                baseline_request_defaults={},
+            )
+            recommendations = build_recommendations(root_causes)
+            compare_data["root_causes"] = root_causes
+            compare_data["recommendations"] = recommendations
+            report_payload = build_report_json(
+                manifest=manifest_payload if isinstance(manifest_payload, dict) else {},
+                compare_data=compare_data,
+                replay_data=replay_data,
+            )
+            report_json_path = out / "report.json"
+            report_html_path = out / "report.html"
+            write_json(report_json_path, report_payload)
+            template_dir = Path(__file__).parent / "report" / "templates"
+            write_text(report_html_path, render_html_report(report_payload, template_dir))
+            write_json(out / "compare.json", compare_data)
+        else:
+            compare_data = read_json(out / "compare.json")
+            replay_path = out / "replay.json"
+            replay_data = (
+                read_json(replay_path) if replay_path.exists() else {"stats": {"failures": 0}}
+            )
+            report_json_path = out / "report.json"
+            report_html_path = out / "report.html"
+
+    if not isinstance(compare_data, dict):
+        raise typer.Exit(code=1)
+    if not isinstance(replay_data, dict):
+        replay_data = {"stats": {"failures": 0}}
+
+    verdict, reasons, _ = _classify_check_verdict(
+        compare_data=compare_data,
+        replay_data=replay_data,
+    )
+    root_cause_summaries = (
+        compare_data.get("root_causes", {}).get("summaries", [])
+        if isinstance(compare_data.get("root_causes"), dict)
+        else []
+    )
+    recommendation_summaries = (
+        compare_data.get("recommendations", {}).get("summaries", [])
+        if isinstance(compare_data.get("recommendations"), dict)
+        else []
+    )
+    _print_check_summary(
+        verdict=verdict,
+        reasons=reasons,
+        root_cause_summaries=[str(item) for item in root_cause_summaries if isinstance(item, str)],
+        recommendation_summaries=[
+            str(item) for item in recommendation_summaries if isinstance(item, str)
+        ],
+    )
+    if pr_comment_out is not None:
+        markdown = _build_check_markdown(
+            verdict=verdict,
+            reasons=reasons,
+            root_cause_summaries=[str(item) for item in root_cause_summaries if isinstance(item, str)],
+            recommendation_summaries=[
+                str(item) for item in recommendation_summaries if isinstance(item, str)
+            ],
+        )
+        write_text(pr_comment_out.resolve(), markdown)
+
+    if report is not None and report_html_path is not None and report_html_path.exists():
+        write_text(report.resolve(), report_html_path.read_text(encoding="utf-8"))
+        typer.echo("")
+        typer.echo(f"Report: {report.resolve()}")
+    elif report_html_path is not None and report_html_path.exists():
+        typer.echo("")
+        typer.echo(f"Report: {report_html_path.resolve()}")
+    if report_json_path is not None and report_json_path.exists():
+        typer.echo(f"JSON: {report_json_path.resolve()}")
+    if pr_comment_out is not None:
+        typer.echo(f"PR Summary: {pr_comment_out.resolve()}")
+
+    if fail_on_risk is not None:
+        threshold = _risk_threshold_value(fail_on_risk)
+        if _risk_threshold_value(verdict) >= threshold:
+            raise typer.Exit(code=2)
 
 @shadow_app.command("create")
 def shadow_create(
@@ -488,6 +1010,64 @@ def queries_extract(
     )
     write_jsonl(out, sampled)
     typer.echo(str(out))
+
+
+@queries_app.command("ingest")
+def queries_ingest(
+    from_path: Path = typer.Option(..., "--from", exists=True, readable=True),
+    out: Path = typer.Option(..., "--out"),
+    state: Path = typer.Option(Path(".solrguard_query_ingest_state.json"), "--state"),
+    format: str = typer.Option("solr_params", "--format"),
+    sanitize: bool = typer.Option(True, "--sanitize/--no-sanitize"),
+    max_new: int | None = typer.Option(None, "--max-new"),
+) -> None:
+    """Incrementally ingest queries from request logs into replay-ready JSONL."""
+    raw_state = {}
+    if state.exists():
+        loaded = read_json(state)
+        if isinstance(loaded, dict):
+            raw_state = loaded
+    processed = set(raw_state.get("fingerprints", [])) if isinstance(raw_state.get("fingerprints"), list) else set()
+    rows = extract_queries_from_log(from_path, fmt=format)
+    new_rows: list[dict[str, Any]] = []
+    for row in rows:
+        params = row.get("params", {})
+        if not isinstance(params, dict) or "q" not in params:
+            continue
+        normalized = sanitize_params(params, enabled=sanitize)
+        fp = query_fingerprint(normalized)
+        if fp in processed:
+            continue
+        processed.add(fp)
+        new_rows.append({"params": normalized, "source": row.get("source", {})})
+        if max_new is not None and len(new_rows) >= max_new:
+            break
+
+    existing: list[dict[str, Any]] = []
+    if out.exists():
+        existing = load_queries(out, fmt="jsonl")
+        existing_rows = []
+        for case in existing:
+            if hasattr(case, "params"):
+                existing_rows.append({"params": case.params})
+        write_jsonl(out, [*existing_rows, *new_rows])
+    else:
+        write_jsonl(out, new_rows)
+
+    write_json(
+        state,
+        {
+            "source_path": str(from_path.resolve()),
+            "fingerprints": sorted(processed),
+            "last_ingested_at": utc_now_iso(),
+        },
+    )
+    typer.echo(
+        json.dumps(
+            {"ingested_new": len(new_rows), "output": str(out.resolve()), "state": str(state.resolve())},
+            indent=2,
+        )
+    )
 
 
 @docs_app.command("sample")
@@ -866,6 +1446,37 @@ def monitor(
         out_dir=out,
     )
     typer.echo(str((out / "latest_monitor.json").resolve()))
+
+
+@app.command("monitor-live")
+def monitor_live(
+    baseline_snapshot: Path = typer.Option(..., "--baseline-snapshot", exists=True, readable=True),
+    queries: Path = typer.Option(..., "--queries", exists=True, readable=True),
+    interval: str = typer.Option("5m", "--interval"),
+    iterations: int = typer.Option(1, "--iterations", min=1),
+    out: Path = typer.Option(..., "--out"),
+    query_format: str = typer.Option("jsonl", "--query-format"),
+) -> None:
+    """Run repeated drift checks (lightweight real-time monitoring loop)."""
+    ensure_dir(out)
+    seconds = _interval_to_seconds(interval)
+    latest_path: Path | None = None
+    for idx in range(iterations):
+        run_monitor(
+            baseline_snapshot_dir=baseline_snapshot,
+            queries_path=queries,
+            query_format=query_format,
+            interval=interval,
+            out_dir=out,
+        )
+        latest_path = out / "latest_monitor.json"
+        typer.echo(f"[monitor-live] iteration={idx + 1}/{iterations} latest={latest_path.resolve()}")
+        if idx < iterations - 1:
+            import time
+
+            time.sleep(seconds)
+    if latest_path is not None:
+        typer.echo(str(latest_path.resolve()))
 
 
 @app.command()
@@ -1324,6 +1935,7 @@ def run(
             privacy_runtime = initialize_privacy(
                 changeset_raw=changeset.raw,
                 security_persist_sensitive=security_persist_sensitive,
+                security_profile_name=security_profile_name,
             )
             privacy_runtime_cfg = privacy_runtime.config
             _PRIVACY_RUNTIME_CFG = privacy_runtime_cfg
@@ -1360,6 +1972,7 @@ def run(
                 verbose=verbose,
                 outputs=manifest.outputs,
                 manifest_inputs=manifest.inputs,
+                baseline_client=baseline_client,
             )
             baseline_schema = snapshot_runtime.baseline_schema
             inspect_payload = snapshot_runtime.inspect_payload

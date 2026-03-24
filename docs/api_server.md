@@ -130,13 +130,24 @@ Job metadata can be stored in:
 
 ## Follow-up Tasks
 
-1. OIDC/JWT provider integration for auth middleware
-2. Postgres-backed job store with migrations
-3. Distributed worker execution with leasing/heartbeats
-4. Websocket/live progress streaming
-5. Run cancellation
-6. Dashboard UI integration
-7. Approval workflow integration
-8. Plugin-managed API extensions
-9. Multi-user audit support
-10. Rate limiting / abuse protection
+1. RBAC / auth middleware
+2. persistent DB-backed job store
+3. distributed worker execution
+4. websocket/live progress streaming
+5. run cancellation
+6. dashboard UI integration
+7. approval workflow integration
+8. plugin-managed API extensions
+9. multi-user audit support
+10. rate limiting / abuse protection
+
+### Next 3 Most Important Production Features
+
+1. GitHub PR integration  
+This lets teams enforce search safety checks directly in pull requests with clear verdict comments before merge.
+
+2. Auto query log ingestion pipeline  
+Automatic ingestion removes setup friction and keeps checks representative of real production traffic patterns.
+
+3. Real-time drift monitoring  
+Continuous drift detection catches safety regressions between releases and turns Schema-Lens into an always-on governance control.
